@@ -3,6 +3,7 @@ import json
 from typing import List, Dict, Any, Optional
 from ..core.tool import Tool, tool, param
 from ..core.agent import ReActAgent
+from ..core.hierarchical_logger import create_child_logger
 
 
 @tool(name="dispatch", description="Dispatch multiple tasks to sub-agents running in parallel")
@@ -55,7 +56,37 @@ class SubAgentDispatchTool(Tool):
             agents_to_use = []
             for i in range(len(tasks)):
                 agent_index = i % len(self.calc_agents)
-                agents_to_use.append(self.calc_agents[agent_index])
+                base_agent = self.calc_agents[agent_index]
+                
+                # Create a copy with hierarchical logger if main agent has logging
+                if self.main_agent and self.main_agent.logger:
+                    # Create child logger for sub-agent
+                    sub_logger = create_child_logger(self.main_agent.agent_name, base_agent.agent_name, True)
+                    
+                    # Create agent copy with child logger
+                    agent_copy = ReActAgent(
+                        system_prompt=base_agent.system_prompt,
+                        api_key=base_agent.api_key,
+                        base_url=getattr(base_agent.client, 'base_url', None) if hasattr(base_agent, 'client') else None,
+                        model=base_agent.model,
+                        temperature=base_agent.temperature,
+                        max_tokens=base_agent.max_tokens,
+                        verbose=False,
+                        debug=False,
+                        logger=sub_logger,
+                        agent_name=base_agent.agent_name
+                    )
+                    
+                    # Copy tools from base agent
+                    if hasattr(base_agent, 'tools'):
+                        for tool_name, tool_instance in base_agent.tools.items():
+                            tool_class = type(tool_instance)
+                            agent_copy.bind_tool(tool_class())
+                    
+                    agents_to_use.append(agent_copy)
+                else:
+                    # No logging, use original agent
+                    agents_to_use.append(base_agent)
         else:
             # Create sub-agents from main agent template
             if not self.main_agent:
@@ -63,15 +94,24 @@ class SubAgentDispatchTool(Tool):
             
             agents_to_use = []
             for i in range(len(tasks)):
+                # Create child logger if main agent has logging
+                sub_logger = None
+                agent_name = f"SubAgent_{i+1}"
+                if self.main_agent.logger:
+                    sub_logger = create_child_logger(self.main_agent.agent_name, agent_name, True)
+                
                 # Create sub-agent with same config as main agent
                 sub_agent_config = {
+                    "system_prompt": f"You are a task executor. Complete the given task efficiently and return the result clearly.",
                     "api_key": self.main_agent.api_key,
                     "base_url": getattr(self.main_agent.client, 'base_url', None),
                     "model": self.main_agent.model,
                     "temperature": self.main_agent.temperature,
                     "max_tokens": self.main_agent.max_tokens,
                     "verbose": False,  # Keep sub-agents quiet to avoid spam
-                    "debug": False
+                    "debug": False,
+                    "logger": sub_logger,
+                    "agent_name": agent_name
                 }
                 
                 # Create sub-agent
@@ -200,28 +240,42 @@ class SubAgentDispatchTool(Tool):
         return summary
     
     def _format_results_only(self, results: List[Dict[str, Any]], tasks: List[str]) -> str:
-        """Format results optimized for agent consumption - just the task results."""
-        output = "Parallel task execution completed. Here are the results:\n\n"
+        """Format results optimized for agent consumption - just the task-result pairs."""
+        output = ""
         
         for i, result in enumerate(results):
             task_desc = tasks[i] if i < len(tasks) else f"Task {i+1}"
             
             if result["status"] == "success":
-                output += f"Task {i+1}: {task_desc}\n"
-                output += f"Result: {result['result']}\n\n"
+                # Extract numerical value from verbose result
+                numerical_result = self._extract_numerical_value(result['result'])
+                output += f"{task_desc}: {numerical_result}\n"
             else:
-                output += f"Task {i+1}: {task_desc}\n"
-                output += f"Error: {result['result']}\n\n"
+                output += f"{task_desc}: Error - {result['result']}\n"
         
-        # Add execution summary for reference
-        successful = [r for r in results if r["status"] == "success"]
-        total_time = sum(r["execution_time"] for r in results)
+        return output.strip()
+    
+    def _extract_numerical_value(self, result_text: str) -> str:
+        """Extract the numerical value from verbose calculation results."""
+        import re
         
-        output += f"Summary: {len(successful)}/{len(results)} tasks completed successfully"
-        if total_time > 0:
-            output += f" in {total_time:.2f}s parallel execution"
+        # Look for patterns like "**123**", "result is 123", "equals 123", etc.
+        patterns = [
+            r'\*\*([0-9.+-]+)\*\*',  # **123**
+            r'result is[:\s]*([0-9.+-]+)',  # result is: 123
+            r'equals?[:\s]*([0-9.+-]+)',  # equals 123
+            r'answer is[:\s]*([0-9.+-]+)',  # answer is 123
+            r'([0-9.+-]+)$',  # Just a number at the end
+            r'^([0-9.+-]+)',  # Just a number at the start
+        ]
         
-        return output
+        for pattern in patterns:
+            match = re.search(pattern, result_text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        
+        # If no pattern matches, return the original result
+        return result_text
     
     def _format_detailed(self, results: List[Dict[str, Any]]) -> str:
         """Format results with full details."""

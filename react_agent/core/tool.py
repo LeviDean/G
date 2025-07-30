@@ -5,6 +5,7 @@ import asyncio
 import inspect
 import logging
 from datetime import datetime
+from .hierarchical_logger import create_child_logger
 
 
 def tool(name: Optional[str] = None, description: Optional[str] = None):
@@ -207,7 +208,7 @@ class Tool(ParameterAccessMixin, ABC):
                  description: Optional[str] = None, 
                  parameters: Optional[Dict[str, Dict[str, Any]]] = None,
                  required: Optional[List[str]] = None,
-                 enable_logging: bool = False,
+                 logger: Optional[logging.Logger] = None,
                  agent_name: Optional[str] = None):
         
         super().__init__()
@@ -231,21 +232,9 @@ class Tool(ParameterAccessMixin, ABC):
         self.required = required or parsed_required
         
         # Logging configuration
-        self.enable_logging = enable_logging
         self.agent_name = agent_name or "UnknownAgent"
-        self.logger = None
-        
-        if self.enable_logging:
-            self.logger = logging.getLogger(f"Tool.{self.name}")
-            if not self.logger.handlers:
-                handler = logging.StreamHandler()
-                formatter = logging.Formatter(
-                    f'%(asctime)s - {self.agent_name}.{self.name} - %(levelname)s - %(message)s',
-                    datefmt='%H:%M:%S'
-                )
-                handler.setFormatter(formatter)
-                self.logger.addHandler(handler)
-                self.logger.setLevel(logging.INFO)
+        self.logger = logger  # Use provided logger or None
+        self.enable_logging = logger is not None
     
     def _log_info(self, message: str):
         """Log an info message if logging is enabled."""

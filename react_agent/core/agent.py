@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable, Union
 from openai import AsyncOpenAI
 from .tool import Tool
+from .hierarchical_logger import get_hierarchical_logger, create_child_logger
 
 
 class ReActAgent:
@@ -21,25 +22,19 @@ class ReActAgent:
     - Token usage tracking
     - Support for OpenAI-compatible APIs
     
-    Supported APIs:
-    - OpenAI (default)
-    - Azure OpenAI
-    - Anthropic Claude (via OpenAI compatibility)
-    - Local models (Ollama, LocalAI, etc.)
-    - Any OpenAI-compatible endpoint
     """
     
     def __init__(self, 
+                 system_prompt: str,
+                 agent_name: Optional[str] = None,
                  api_key: Optional[str] = None,
                  base_url: Optional[str] = None,
                  model: str = "gpt-4",
                  temperature: float = 0.1,
-                 max_tokens: Optional[int] = None,
-                 system_prompt: Optional[str] = None,
+                 max_tokens: Optional[int] = 128000,
                  verbose: bool = False,
                  debug: bool = False,
-                 enable_logging: bool = False,
-                 agent_name: Optional[str] = None,
+                 logger: Optional[logging.Logger] = None,
                  **client_kwargs):
         
         # API Configuration - all services must follow OpenAI specification
@@ -65,30 +60,21 @@ class ReActAgent:
         self.max_tokens = max_tokens
         
         # Agent Configuration
-        self.system_prompt = system_prompt
+        if not system_prompt or not system_prompt.strip():
+            raise ValueError("system_prompt is required and cannot be empty")
+        self.system_prompt = system_prompt.strip()
         self.verbose = verbose
         self.debug = debug
         
         # Logging Configuration
-        self.enable_logging = enable_logging
         self.agent_name = agent_name or f"Agent_{id(self)}"
-        self.logger = None
-        
-        if self.enable_logging:
-            self.logger = logging.getLogger(f"ReActAgent.{self.agent_name}")
-            if not self.logger.handlers:
-                handler = logging.StreamHandler()
-                formatter = logging.Formatter(
-                    f'%(asctime)s - {self.agent_name} - %(levelname)s - %(message)s',
-                    datefmt='%H:%M:%S'
-                )
-                handler.setFormatter(formatter)
-                self.logger.addHandler(handler)
-                self.logger.setLevel(logging.INFO)
+        self.logger = logger  # Use provided logger or None
+        self.enable_logging = logger is not None
         
         # State
         self.tools: Dict[str, Tool] = {}
-        self.conversation_history: List[Dict[str, Any]] = []
+        self.conversation_history: List[Dict[str, Any]] = []  # OpenAI API format
+        self.detailed_history: List[Dict[str, Any]] = []     # Full interaction history
         self.total_tokens = 0
         self.operation_count = 0
         self.start_time = datetime.now()
@@ -129,6 +115,53 @@ class ReActAgent:
         if result_preview:
             preview = result_preview[:100] + "..." if len(result_preview) > 100 else result_preview
             self._log_info(f"   Result: {preview}")
+    
+    def _add_detailed_history_entry(self, entry_type: str, content: Dict[str, Any]):
+        """Add an entry to the detailed conversation history."""
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "type": entry_type,  # "user_message", "tool_call", "tool_result", "agent_response", "iteration_start"
+            "content": content
+        }
+        self.detailed_history.append(entry)
+        
+        # Log if enabled
+        if entry_type == "user_message":
+            self._log_info(f"👤 User: {content.get('message', '')[:100]}")
+        elif entry_type == "tool_call":
+            self._log_info(f"🔧 Tool call: {content.get('tool_name')} -> {content.get('args', {})}")
+        elif entry_type == "tool_result":
+            result_preview = str(content.get('result', ''))[:50]
+            self._log_info(f"🛠️  Tool result: {result_preview}...")
+        elif entry_type == "agent_response":
+            response_preview = content.get('response', '')[:100]
+            self._log_info(f"🤖 Agent response: {response_preview}...")
+    
+    def get_detailed_history(self) -> List[Dict[str, Any]]:
+        """Get the complete detailed interaction history."""
+        return self.detailed_history.copy()
+    
+    def get_conversation_summary(self) -> Dict[str, Any]:
+        """Get a summary of the conversation including tool interactions."""
+        user_messages = [h for h in self.detailed_history if h["type"] == "user_message"]
+        tool_calls = [h for h in self.detailed_history if h["type"] == "tool_call"]
+        agent_responses = [h for h in self.detailed_history if h["type"] == "agent_response"]
+        
+        tools_used = {}
+        for tool_call in tool_calls:
+            tool_name = tool_call["content"].get("tool_name", "unknown")
+            tools_used[tool_name] = tools_used.get(tool_name, 0) + 1
+        
+        return {
+            "total_interactions": len(self.detailed_history),
+            "user_messages": len(user_messages),
+            "tool_calls": len(tool_calls),
+            "agent_responses": len(agent_responses),
+            "tools_used": tools_used,
+            "conversation_duration": (datetime.now() - self.start_time).total_seconds(),
+            "total_tokens": self.total_tokens,
+            "operations": self.operation_count
+        }
         
     def bind_tool(self, tool: Tool) -> 'ReActAgent':
         """
@@ -148,12 +181,13 @@ class ReActAgent:
             if self.verbose:
                 print(f"Warning: Overriding existing tool '{tool.name}'")
         
-        self.tools[tool.name] = tool
-        
-        # Enable logging for the tool if agent logging is enabled
-        if hasattr(tool, 'enable_logging'):
-            tool.enable_logging = self.enable_logging
+        # Create child logger for the tool if agent has logging enabled
+        if self.logger is not None:
+            tool.logger = create_child_logger(self.agent_name, f"{self.agent_name}.{tool.name}", True)
+            tool.enable_logging = True
             tool.agent_name = self.agent_name
+        
+        self.tools[tool.name] = tool
         
         self._log_info(f"🔧 Tool bound: {tool.name} - {tool.description}")
         if self.debug:
@@ -197,25 +231,18 @@ class ReActAgent:
     
     def _create_system_prompt(self) -> str:
         """Create the system prompt for the ReAct agent."""
-        if self.system_prompt:
-            return self.system_prompt
+        # Always use the provided system prompt - no auto-generation
+        base_prompt = self.system_prompt
         
-        tool_descriptions = ""
+        # Optionally append tool information if tools are available
         if self.tools:
             tool_descriptions = "\n\nAvailable tools:\n" + "\n".join([
                 f"- {tool.name}: {tool.description}"
                 for tool in self.tools.values()
             ])
+            return f"{base_prompt}{tool_descriptions}"
         
-        return f"""You are a ReAct agent that can reason and act using available tools.
-
-Use the ReAct pattern:
-1. Think about what you need to do
-2. Use available function calls to gather information or perform actions
-3. Observe the results
-4. Continue reasoning and acting until you can provide a complete answer
-
-You have access to various tools via function calls. Use them as needed to solve the user's query.{tool_descriptions}"""
+        return base_prompt
 
     async def _execute_tool_call(self, tool_call) -> str:
         """Execute a function call and return the result (async)."""
@@ -239,6 +266,13 @@ You have access to various tools via function calls. Use them as needed to solve
         self._log_info(f"🔧 Calling tool: {function_name}")
         self._log_info(f"   Args: {function_args}")
         
+        # Track in detailed history
+        self._add_detailed_history_entry("tool_call", {
+            "tool_name": function_name,
+            "args": function_args,
+            "tool_call_id": tool_call.id
+        })
+        
         # Call callback if set
         if self.on_tool_call:
             self.on_tool_call(function_name, function_args)
@@ -253,9 +287,18 @@ You have access to various tools via function calls. Use them as needed to solve
             result_str = str(result)
             
             # Log successful completion
-            self._log_info(f"✅ Tool completed: {function_name}")
-            self._log_info(f"   Time: {execution_time:.2f}s")
-            self._log_info(f"   Result: {result_str[:100]}{'...' if len(result_str) > 100 else ''}")
+            # self._log_info(f"✅ Tool completed: {function_name}")
+            # self._log_info(f"   Time: {execution_time:.2f}s")
+            # self._log_info(f"   Result: {result_str[:100]}{'...' if len(result_str) > 100 else ''}")
+            
+            # Track in detailed history
+            self._add_detailed_history_entry("tool_result", {
+                "tool_name": function_name,
+                "result": result_str,
+                "execution_time": execution_time,
+                "success": True,
+                "tool_call_id": tool_call.id
+            })
             
             if self.verbose:
                 print(f"✅ Tool result: {result_str[:100]}{'...' if len(result_str) > 100 else ''}")
@@ -268,6 +311,16 @@ You have access to various tools via function calls. Use them as needed to solve
             self._log_error(f"Tool execution failed: {function_name}")
             self._log_error(f"   Time: {execution_time:.2f}s")
             self._log_error(f"   Error: {str(e)}")
+            
+            # Track failed tool result in detailed history
+            self._add_detailed_history_entry("tool_result", {
+                "tool_name": function_name,
+                "result": error_msg,
+                "execution_time": execution_time,
+                "success": False,
+                "error": str(e),
+                "tool_call_id": tool_call.id
+            })
             
             if self.verbose:
                 print(f"❌ {error_msg}")
@@ -305,6 +358,12 @@ You have access to various tools via function calls. Use them as needed to solve
             {"role": "system", "content": self._create_system_prompt()},
             {"role": "user", "content": query}
         ]
+        
+        # Track in detailed history
+        self._add_detailed_history_entry("user_message", {
+            "message": query,
+            "operation": "Agent Run"
+        })
         
         try:
             for iteration in range(max_iterations):
@@ -383,6 +442,15 @@ You have access to various tools via function calls. Use them as needed to solve
                         final_answer = message.content.strip()
                         execution_time = (datetime.now() - run_start).total_seconds()
                         
+                        # Track final response in detailed history
+                        self._add_detailed_history_entry("agent_response", {
+                            "response": final_answer,
+                            "iterations": iteration + 1,
+                            "operation": "Agent Run",
+                            "execution_time": execution_time,
+                            "final": True
+                        })
+                        
                         self._log_operation_complete("Agent Run", execution_time, final_answer[:200])
                         self._log_info(f"🎯 Final answer after {iteration + 1} iterations")
                         
@@ -450,6 +518,12 @@ You have access to various tools via function calls. Use them as needed to solve
         self.conversation_history.append({
             "role": "user", 
             "content": message
+        })
+        
+        # Track in detailed history
+        self._add_detailed_history_entry("user_message", {
+            "message": message,
+            "operation": "Chat Continue"
         })
         
         # Continue from current state

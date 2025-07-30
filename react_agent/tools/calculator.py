@@ -18,18 +18,27 @@ class CalculatorTool(Tool):
         expression = expression.strip()
         
         # Simple safety check - only allow certain characters
-        allowed_chars = set('0123456789+-*/.() ')
+        allowed_chars = set('0123456789+-*/.()^ ')
         
         if not all(c in allowed_chars or c.isalpha() for c in expression):
             return "Error: Invalid characters in expression"
         
-        # Replace math functions
+        # Replace math functions and operators
         safe_expression = expression
+        safe_expression = safe_expression.replace('^', '**')  # Convert ^ to ** for Python
         safe_expression = safe_expression.replace('sqrt', 'math.sqrt')
-        safe_expression = safe_expression.replace('sin', 'math.sin')
-        safe_expression = safe_expression.replace('cos', 'math.cos')
-        safe_expression = safe_expression.replace('tan', 'math.tan')
-        safe_expression = safe_expression.replace('log', 'math.log')
+        
+        # Handle trig functions - assume degrees and convert to radians
+        import re
+        
+        # Replace sin(x) with math.sin(math.radians(x))
+        safe_expression = re.sub(r'sin\(([^)]+)\)', r'math.sin(math.radians(\1))', safe_expression)
+        safe_expression = re.sub(r'cos\(([^)]+)\)', r'math.cos(math.radians(\1))', safe_expression)
+        safe_expression = re.sub(r'tan\(([^)]+)\)', r'math.tan(math.radians(\1))', safe_expression)
+        
+        # Add other math functions
+        safe_expression = safe_expression.replace('log', 'math.log10')
+        safe_expression = safe_expression.replace('ln', 'math.log')
         safe_expression = safe_expression.replace('exp', 'math.exp')
         safe_expression = safe_expression.replace('abs', 'abs')
         
