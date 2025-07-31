@@ -61,11 +61,8 @@ class Desk:
         self.agent.conversation_history = self._get_conversation_for_llm()
         
         try:
-            # Get agent response
-            if len(self.messages) <= 1:  # First message
-                response = await self.agent.run(user_message)
-            else:
-                response = await self.agent.chat(user_message)
+            # Use the unified execute method - it auto-detects new vs continuing conversation
+            response = await self.agent.execute(user_message)
             
             # Record agent response
             self._add_message(MessageRole.AGENT, response)
@@ -77,6 +74,41 @@ class Desk:
             # Record error
             self._add_message(MessageRole.AGENT, error_msg)
             return error_msg
+    
+    async def chat_stream(self, user_message: str):
+        """
+        User sends a message to the agent through the desk with streaming response.
+        Session automatically records the conversation.
+        """
+        # Record user message
+        self._add_message(MessageRole.USER, user_message)
+        
+        # Update agent's conversation history from our session
+        self.agent.conversation_history = self._get_conversation_for_llm()
+        
+        full_response = ""
+        
+        try:
+            # Use the unified stream method - it auto-detects new vs continuing conversation
+            async for update in self.agent.stream(user_message):
+                # Yield the update to the caller
+                yield update
+                
+                # Collect thinking and final content
+                if update["type"] == "thinking":
+                    full_response += update["content"]
+                elif update["type"] == "final":
+                    full_response = update["content"]  # Final response overrides collected thinking
+            
+            # Record agent response
+            if full_response:
+                self._add_message(MessageRole.AGENT, full_response)
+            
+        except Exception as e:
+            error_msg = f"Error: {str(e)}"
+            # Record error
+            self._add_message(MessageRole.AGENT, error_msg)
+            yield {"type": "error", "content": error_msg}
     
     def reset_conversation(self):
         """Clear the conversation history."""

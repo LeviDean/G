@@ -137,7 +137,7 @@ class ReActAgent:
             self._log_info(f"🛠️  Tool result: {result_preview}...")
         elif entry_type == "agent_response":
             response_preview = content.get('response', '')[:100]
-            self._log_info(f"🤖 Agent response: {response_preview}...")
+            # self._log_info(f"🤖 Agent response: {response_preview}...")
     
     def get_detailed_history(self) -> List[Dict[str, Any]]:
         """Get the complete detailed interaction history."""
@@ -386,41 +386,64 @@ class ReActAgent:
     
     async def run(self, query: str, max_iterations: int = 10, stream: bool = False) -> str:
         """
-        Run the ReAct agent on a query (async).
+        Backward compatibility method. Use execute() instead.
+        Run the ReAct agent starting a new conversation.
+        """
+        # Reset conversation to ensure new start
+        self.conversation_history = []
+        return await self.execute(query, max_iterations)
+    
+    async def execute(self, message: str, max_iterations: int = 10) -> str:
+        """
+        Execute the agent with a message. Auto-detects new vs continuing conversation.
         
         Args:
-            query: The user's query/question
+            message: The user's message/question
             max_iterations: Maximum number of reasoning iterations
-            stream: Whether to stream intermediate results (future feature)
             
         Returns:
             The agent's final response
             
         Raises:
-            ValueError: If query is empty or no tools are bound when needed
+            ValueError: If message is empty
             Exception: If API call fails
         """
-        if not query.strip():
-            raise ValueError("Query cannot be empty")
+        if not message.strip():
+            raise ValueError("Message cannot be empty")
         
         run_start = datetime.now()
-        self._log_operation_start("Agent Run", f"Query: {query[:100]}{'...' if len(query) > 100 else ''}")
-        self._log_info(f"📋 Available tools: {list(self.tools.keys())}")
+        is_new_conversation = not self.conversation_history
         
-        if self.verbose:
-            print(f"🤖 Starting ReAct agent with query: {query}")
-            print(f"📋 Available tools: {list(self.tools.keys())}")
+        # Log operation
+        operation = "Agent Execute (New)" if is_new_conversation else "Agent Execute (Continue)"
+        self._log_operation_start(operation, f"Message: {message[:100]}{'...' if len(message) > 100 else ''}")
         
-        # Initialize conversation
-        self.conversation_history = [
-            {"role": "system", "content": self._create_system_prompt()},
-            {"role": "user", "content": query}
-        ]
+        if is_new_conversation:
+            self._log_info(f"📋 Available tools: {list(self.tools.keys())}")
+            if self.verbose:
+                print(f"🤖 Starting ReAct agent with message: {message}")
+                print(f"📋 Available tools: {list(self.tools.keys())}")
+        
+        # Initialize or continue conversation
+        if is_new_conversation:
+            # New conversation - initialize with system prompt
+            self.conversation_history = [
+                {"role": "system", "content": self._create_system_prompt()},
+                {"role": "user", "content": message}
+            ]
+            operation_type = "Agent Execute New"
+        else:
+            # Continue existing conversation
+            self.conversation_history.append({
+                "role": "user", 
+                "content": message
+            })
+            operation_type = "Agent Execute Continue"
         
         # Track in detailed history
         self._add_detailed_history_entry("user_message", {
-            "message": query,
-            "operation": "Agent Run"
+            "message": message,
+            "operation": operation_type
         })
         
         try:
@@ -432,7 +455,7 @@ class ReActAgent:
                 
                 # Call iteration callback if set
                 if self.on_iteration:
-                    self.on_iteration(iteration + 1, query)
+                    self.on_iteration(iteration + 1, message)
                 
                 # Get tool schemas for function calling
                 tools = self._get_tool_schemas() if self.tools else None
@@ -460,23 +483,23 @@ class ReActAgent:
                     if self.debug:
                         print(f"🔢 Tokens used this call: {response.usage.total_tokens}, Total: {self.total_tokens}")
                 
-                message = response.choices[0].message
+                message_obj = response.choices[0].message
                 
                 # Add assistant message to history
                 self.conversation_history.append({
                     "role": "assistant",
-                    "content": message.content,
-                    "tool_calls": message.tool_calls
+                    "content": message_obj.content,
+                    "tool_calls": message_obj.tool_calls
                 })
                 
-                if self.verbose and message.content:
-                    print(f"🧠 Agent thinking: {message.content}")
+                if self.verbose and message_obj.content:
+                    print(f"🧠 Agent thinking: {message_obj.content}")
                 
                 # Execute tool calls if any - run concurrently for better performance
-                if message.tool_calls:
-                    if len(message.tool_calls) == 1:
+                if message_obj.tool_calls:
+                    if len(message_obj.tool_calls) == 1:
                         # Single tool call
-                        tool_call = message.tool_calls[0]
+                        tool_call = message_obj.tool_calls[0]
                         result = await self._execute_tool_call(tool_call)
                         self.conversation_history.append({
                             "role": "tool",
@@ -485,10 +508,10 @@ class ReActAgent:
                         })
                     else:
                         # Multiple tool calls - execute concurrently
-                        tasks = [self._execute_tool_call(tool_call) for tool_call in message.tool_calls]
+                        tasks = [self._execute_tool_call(tool_call) for tool_call in message_obj.tool_calls]
                         results = await asyncio.gather(*tasks)
                         
-                        for tool_call, result in zip(message.tool_calls, results):
+                        for tool_call, result in zip(message_obj.tool_calls, results):
                             self.conversation_history.append({
                                 "role": "tool",
                                 "tool_call_id": tool_call.id,
@@ -496,27 +519,29 @@ class ReActAgent:
                             })
                 else:
                     # No tool calls, we have a final answer
-                    if message.content:
-                        final_answer = message.content.strip()
+                    if message_obj.content:
+                        final_answer = message_obj.content.strip()
                         execution_time = (datetime.now() - run_start).total_seconds()
+                        
+                        self._log_operation_complete(operation, execution_time)
+                        
+                        if self.verbose:
+                            print(f"✅ Final answer: {final_answer}")
+                        
+                        agent_response_preview = final_answer[:100] + "..." if len(final_answer) > 100 else final_answer
+                        self._log_info(f"🤖 Agent response: {agent_response_preview}")
                         
                         # Track final response in detailed history
                         self._add_detailed_history_entry("agent_response", {
                             "response": final_answer,
                             "iterations": iteration + 1,
-                            "operation": "Agent Run",
+                            "operation": operation_type,
                             "execution_time": execution_time,
                             "final": True
                         })
                         
-                        self._log_operation_complete("Agent Run", execution_time, final_answer[:200])
-                        self._log_info(f"🎯 Final answer after {iteration + 1} iterations")
-                        
-                        if self.verbose:
-                            print(f"✨ Final answer: {final_answer}")
                         return final_answer
             
-            # Max iterations reached
             timeout_msg = f"Maximum iterations ({max_iterations}) reached without finding a final answer."
             if self.verbose:
                 print(f"⏰ {timeout_msg}")
@@ -529,6 +554,197 @@ class ReActAgent:
                 print(f"❌ {error_msg}")
                 traceback.print_exc()
             raise Exception(error_msg) from e
+    
+    async def stream(self, message: str, max_iterations: int = 10):
+        """
+        Stream the agent's reasoning process with real-time updates.
+        Automatically detects if this is a new conversation or continuation.
+        
+        Args:
+            message: The user's message/question
+            max_iterations: Maximum number of reasoning iterations
+            
+        Yields:
+            Dict with progress updates: {"type": "status|thinking|tool_call|tool_result|final", "content": str}
+        """
+        if not message.strip():
+            raise ValueError("Message cannot be empty")
+        
+        run_start = datetime.now()
+        is_new_conversation = not self.conversation_history
+        
+        # Log operation
+        operation = "Agent Stream (New)" if is_new_conversation else "Agent Stream (Continue)"
+        self._log_operation_start(operation, f"Message: {message[:100]}{'...' if len(message) > 100 else ''}")
+        
+        # Initialize or continue conversation
+        if is_new_conversation:
+            # New conversation - initialize with system prompt
+            self.conversation_history = [
+                {"role": "system", "content": self._create_system_prompt()},
+                {"role": "user", "content": message}
+            ]
+            operation_type = "Agent Stream New"
+        else:
+            # Continue existing conversation
+            self.conversation_history.append({
+                "role": "user", 
+                "content": message
+            })
+            operation_type = "Agent Stream Continue"
+        
+        # Track in detailed history
+        self._add_detailed_history_entry("user_message", {
+            "message": message,
+            "operation": operation_type
+        })
+        
+        try:
+            for iteration in range(max_iterations):
+                # Get tool schemas for function calling
+                tools = self._get_tool_schemas() if self.tools else None
+                
+                # Prepare API call parameters
+                api_params = {
+                    "model": self.model,
+                    "messages": self.conversation_history,
+                    "temperature": self.temperature,
+                    "stream": True  # Enable streaming
+                }
+                
+                if self.max_tokens:
+                    api_params["max_tokens"] = self.max_tokens
+                    
+                if tools:
+                    api_params["tools"] = tools
+                    api_params["tool_choice"] = "auto"
+                
+                # Get streaming response from LLM
+                stream_response = await self.client.chat.completions.create(**api_params)
+                
+                collected_content = ""
+                collected_tool_calls = []
+                
+                async for chunk in stream_response:
+                    if chunk.choices and chunk.choices[0].delta:
+                        delta = chunk.choices[0].delta
+                        
+                        # Stream thinking content
+                        if delta.content:
+                            collected_content += delta.content
+                            yield {"type": "thinking", "content": delta.content}
+                        
+                        # Collect tool calls
+                        if delta.tool_calls:
+                            for tool_call_delta in delta.tool_calls:
+                                # Extend tool calls list if needed
+                                while len(collected_tool_calls) <= tool_call_delta.index:
+                                    collected_tool_calls.append({
+                                        "id": "",
+                                        "type": "function",
+                                        "function": {"name": "", "arguments": ""}
+                                    })
+                                
+                                tc = collected_tool_calls[tool_call_delta.index]
+                                if tool_call_delta.id:
+                                    tc["id"] = tool_call_delta.id
+                                if tool_call_delta.function:
+                                    if tool_call_delta.function.name:
+                                        tc["function"]["name"] = tool_call_delta.function.name
+                                    if tool_call_delta.function.arguments:
+                                        tc["function"]["arguments"] += tool_call_delta.function.arguments
+                
+                # Add complete message to history
+                tool_calls_for_history = None
+                if collected_tool_calls:
+                    # Convert to dict format that can be serialized
+                    tool_calls_for_history = []
+                    for tc in collected_tool_calls:
+                        if tc["function"]["name"]:  # Only add complete tool calls
+                            tool_calls_for_history.append({
+                                "id": tc["id"],
+                                "type": tc["type"],
+                                "function": {
+                                    "name": tc["function"]["name"],
+                                    "arguments": tc["function"]["arguments"]
+                                }
+                            })
+                
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": collected_content,
+                    "tool_calls": tool_calls_for_history
+                })
+                
+                # Execute tool calls if any
+                if tool_calls_for_history:
+                    # Create SimpleNamespace objects for tool execution
+                    from types import SimpleNamespace
+                    for tc_dict in tool_calls_for_history:
+                        # Convert dict back to object for _execute_tool_call
+                        tool_call = SimpleNamespace()
+                        tool_call.id = tc_dict["id"]
+                        tool_call.type = tc_dict["type"]
+                        tool_call.function = SimpleNamespace()
+                        tool_call.function.name = tc_dict["function"]["name"]
+                        tool_call.function.arguments = tc_dict["function"]["arguments"]
+                        
+                        yield {"type": "tool_call", "content": f"🔧 Using {tool_call.function.name}..."}
+                        
+                        result = await self._execute_tool_call(tool_call)
+                        self.conversation_history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": result
+                        })
+                        
+                        # Show tool result preview
+                        result_preview = result[:200] + "..." if len(result) > 200 else result
+                        yield {"type": "tool_result", "content": f"✅ Result: {result_preview}"}
+                else:
+                    # No tool calls, we have a final answer
+                    if collected_content:
+                        execution_time = (datetime.now() - run_start).total_seconds()
+                        
+                        # Track final response in detailed history
+                        self._add_detailed_history_entry("agent_response", {
+                            "response": collected_content,
+                            "iterations": iteration + 1,
+                            "operation": operation_type,
+                            "execution_time": execution_time,
+                            "final": True
+                        })
+                        
+                        yield {"type": "final", "content": collected_content}
+                        return
+            
+            # Max iterations reached
+            timeout_msg = f"Maximum iterations ({max_iterations}) reached without finding a final answer."
+            yield {"type": "final", "content": timeout_msg}
+            
+        except Exception as e:
+            error_msg = f"Error during agent execution: {str(e)}"
+            yield {"type": "error", "content": error_msg}
+            raise Exception(error_msg) from e
+    
+    # Backward compatibility methods
+    async def run_stream(self, query: str, max_iterations: int = 10):
+        """
+        Backward compatibility method. Use stream() instead.
+        Stream the agent's reasoning process starting a new conversation.
+        """
+        # Reset conversation to ensure new start
+        self.conversation_history = []
+        async for update in self.stream(query, max_iterations):
+            yield update
+    
+    async def chat_stream(self, message: str, max_iterations: int = 10):
+        """
+        Backward compatibility method. Use stream() instead.
+        Stream the agent's reasoning process continuing existing conversation.
+        """
+        async for update in self.stream(message, max_iterations):
+            yield update
     
     def run_sync(self, query: str, max_iterations: int = 10, stream: bool = False) -> str:
         """
@@ -559,33 +775,11 @@ class ReActAgent:
     
     async def chat(self, message: str) -> str:
         """
-        Continue the conversation with a follow-up message (async).
-        Maintains conversation context.
-        
-        Args:
-            message: Follow-up message
-            
-        Returns:
-            Agent's response
+        Backward compatibility method. Use execute() instead.
+        Continue the conversation with existing context.
         """
-        if not self.conversation_history:
-            # First message, same as run()
-            return await self.run(message)
-        
-        # Add user message to existing conversation
-        self.conversation_history.append({
-            "role": "user", 
-            "content": message
-        })
-        
-        # Track in detailed history
-        self._add_detailed_history_entry("user_message", {
-            "message": message,
-            "operation": "Chat Continue"
-        })
-        
-        # Continue from current state
-        return await self._continue_conversation()
+        return await self.execute(message)
+    
     
     def chat_sync(self, message: str) -> str:
         """
@@ -658,6 +852,7 @@ class ReActAgent:
             
         except Exception as e:
             raise Exception(f"Error in chat continuation: {str(e)}") from e
+    
     
     def get_conversation_history(self) -> List[Dict[str, Any]]:
         """Get the current conversation history."""

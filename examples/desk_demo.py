@@ -31,10 +31,9 @@ async def main():
     print("🏢 INTERACTIVE DESK DEMO")
     print("=" * 50)
     print("Simple desk interface - just sit down and chat!")
-    print("Commands: 'quit' to exit, 'reset' to clear history")
-    print("          'stats' for session statistics")
-    print("          'details' for agent's detailed history")
-    print("          'export' to export conversation")
+    print("Commands: '/help' for command list, '/quit' to exit")
+    print("          '/reset' to clear history, '/stats' for session statistics")
+    print("          '/details' for agent's detailed history, '/export' to export conversation")
     print()
     
     logger = get_hierarchical_logger("demo", hierarchy_level=0, enable_logging=True)
@@ -74,6 +73,7 @@ Be helpful and conversational.""",
     print("   • Ask questions and build on previous answers")
     print("   • Calculate something, then ask about the result")
     print("   • Create files and refer to them later")
+    print("   • Watch the agent think and work in real-time!")
     print("   • The desk remembers everything automatically")
     print()
     
@@ -84,17 +84,29 @@ Be helpful and conversational.""",
             if not user_input:
                 continue
                 
-            if user_input.lower() in ['quit', 'exit', 'q']:
+            if user_input.lower() in ['/help', 'help']:
+                print("\n📋 Available Commands:")
+                print("   /help      - Show this help message")
+                print("   /quit      - Exit the session")  
+                print("   /reset     - Clear conversation history")
+                print("   /stats     - Show session statistics")
+                print("   /details   - Show agent's detailed history")
+                print("   /export    - Export conversation to markdown")
+                print("\n💡 Or just type any message to chat with the agent!")
+                print()
+                continue
+                
+            if user_input.lower() in ['/quit', '/exit', '/q', 'quit', 'exit', 'q']:
                 stats = desk.get_session_stats()
                 print(f"\n👋 Session ended! Total messages: {stats['total_messages']}")
                 break
                 
-            if user_input.lower() == 'reset':
+            if user_input.lower() in ['/reset', 'reset']:
                 desk.reset_conversation()
                 print("🔄 Conversation history cleared!")
                 continue
                 
-            if user_input.lower() == 'stats':
+            if user_input.lower() in ['/stats', 'stats']:
                 stats = desk.get_session_stats()
                 print(f"\n📊 Session Statistics:")
                 print(f"   Duration: {stats['duration_minutes']:.1f} minutes")
@@ -110,12 +122,30 @@ Be helpful and conversational.""",
                 print()
                 continue
                 
-            if user_input.lower() == 'details':
+            if user_input.lower() in ['/details', 'details']:
+                # Show both session conversation and agent detailed history
+                session_history = desk.get_conversation_history()
                 detailed_history = desk.get_agent_detailed_history()
-                print(f"\n🔍 Agent Detailed History ({len(detailed_history)} entries):")
+                
+                print(f"\n🏢 Session Conversation History ({len(session_history)} messages):")
                 print("-" * 60)
-                for i, entry in enumerate(detailed_history[-10:], 1):  # Show last 10 entries
+                for i, message in enumerate(session_history[-5:], 1):  # Show last 5 session messages
+                    timestamp = message.timestamp.strftime("%H:%M:%S")
+                    role = message.role.value.upper()
+                    content = message.content
+                    if len(content) > 150:
+                        content = content[:147] + "..."
+                    print(f"{i}. [{timestamp}] {role}: {content}")
+                if len(session_history) > 5:
+                    print(f"... showing last 5 of {len(session_history)} total messages")
+                print()
+                
+                print(f"🤖 Agent Detailed History ({len(detailed_history)} entries):")
+                print("-" * 60)
+                for i, entry in enumerate(detailed_history[-8:], 1):  # Show last 8 detailed entries
                     timestamp = entry.get('timestamp', 'Unknown')
+                    if 'T' in timestamp:  # ISO format
+                        timestamp = timestamp.split('T')[1][:8]  # Just time part
                     entry_type = entry.get('type', 'Unknown')
                     content = entry.get('content', {})
                     print(f"{i}. [{timestamp}] {entry_type.upper()}")
@@ -130,43 +160,36 @@ Be helpful and conversational.""",
                     elif entry_type == 'tool_call':
                         tool_name = content.get('tool_name', 'Unknown')
                         args = content.get('args', {})
-                        tool_call_id = content.get('tool_call_id', '')
                         print(f"   Tool: {tool_name}")
                         if args:
                             print(f"   Parameters: {args}")
-                        if tool_call_id:
-                            print(f"   Call ID: {tool_call_id}")
                     elif entry_type == 'tool_result':
                         tool_name = content.get('tool_name', 'Unknown')
                         result = content.get('result', '')
                         success = content.get('success', False)
                         execution_time = content.get('execution_time', 0)
                         # Truncate long results
-                        if len(str(result)) > 200:
-                            result = str(result)[:197] + "..."
-                        print(f"   Tool: {tool_name}")
-                        print(f"   Success: {success}")
-                        print(f"   Time: {execution_time:.3f}s")
+                        if len(str(result)) > 150:
+                            result = str(result)[:147] + "..."
+                        print(f"   Tool: {tool_name} | Success: {success} | Time: {execution_time:.3f}s")
                         print(f"   Result: {result}")
                     elif entry_type == 'agent_response':
                         response = content.get('response', '')
                         iterations = content.get('iterations', 0)
                         operation = content.get('operation', '')
                         execution_time = content.get('execution_time', 0)
-                        if len(str(response)) > 200:
-                            response = str(response)[:197] + "..."
+                        if len(str(response)) > 150:
+                            response = str(response)[:147] + "..."
                         print(f"   Response: {response}")
-                        print(f"   Iterations: {iterations}")
-                        print(f"   Operation: {operation}")
-                        print(f"   Time: {execution_time:.3f}s")
+                        print(f"   Iterations: {iterations} | Operation: {operation} | Time: {execution_time:.3f}s")
                     print()
                     
-                if len(detailed_history) > 10:
-                    print(f"... showing last 10 of {len(detailed_history)} total entries")
+                if len(detailed_history) > 8:
+                    print(f"... showing last 8 of {len(detailed_history)} total entries")
                 print("-" * 60)
                 continue
                 
-            if user_input.lower() == 'export':
+            if user_input.lower() in ['/export', 'export']:
                 conversation = desk.export_conversation("markdown")
                 print(f"\n📄 Conversation Export:")
                 print("-" * 50)
@@ -174,11 +197,42 @@ Be helpful and conversational.""",
                 print("-" * 50)
                 continue
             
-            # Chat through the desk - session is handled automatically
+            # Chat through the desk with streaming - session is handled automatically
             print("\nAgent: ", end="", flush=True)
-            response = await desk.chat(user_input)
-            print(response)
-            print()
+            
+            try:
+                final_response = ""
+                async for update in desk.chat_stream(user_input):
+                    if update["type"] == "status":
+                        # Show status updates in dim color
+                        print(f"\n   {update['content']}", flush=True)
+                    elif update["type"] == "thinking":
+                        # Stream the agent's thinking in real-time
+                        print(update["content"], end="", flush=True)
+                    elif update["type"] == "tool_call":
+                        # Show tool calls
+                        print(f"\n   {update['content']}", flush=True)
+                    elif update["type"] == "tool_result":
+                        # Show tool results
+                        print(f"   {update['content']}", flush=True)
+                        print("   ", end="", flush=True)  # Indent for continued response
+                    elif update["type"] == "final":
+                        # Final response - might be different from thinking if tools were used
+                        if not final_response:  # Only print if we haven't streamed thinking
+                            print(update["content"], end="", flush=True)
+                        final_response = update["content"]
+                    elif update["type"] == "error":
+                        print(f"\n❌ {update['content']}", flush=True)
+                        
+                print()  # New line after streaming is complete
+                print()  # Extra line for spacing
+                        
+            except Exception as e:
+                print(f"\n❌ Streaming error: {e}")
+                # Fallback to non-streaming
+                response = await desk.chat(user_input)
+                print(response)
+                print()
             
         except KeyboardInterrupt:
             stats = desk.get_session_stats()
