@@ -136,7 +136,8 @@ class ReActAgent:
             result_preview = str(content.get('result', ''))[:50]
             self._log_info(f"🛠️  Tool result: {result_preview}...")
         elif entry_type == "agent_response":
-            response_preview = content.get('response', '')[:100]
+            pass
+            # response_preview = content.get('response', '')[:100]
             # self._log_info(f"🤖 Agent response: {response_preview}...")
     
     def get_detailed_history(self) -> List[Dict[str, Any]]:
