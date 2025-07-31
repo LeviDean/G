@@ -190,9 +190,3 @@ agent = ReActAgent(
     debug=True     # Detailed debugging
 )
 ```
-
-## Examples
-
-- `examples/desk_demo.py` - Interactive desk interface
-- `examples/unified_demo.py` - Unified API demonstration  
-- `examples/demo.py` - Tool dispatch and agent capabilities
