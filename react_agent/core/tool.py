@@ -235,6 +235,9 @@ class Tool(ParameterAccessMixin, ABC):
         self.agent_name = agent_name or "UnknownAgent"
         self.logger = logger  # Use provided logger or None
         self.enable_logging = logger is not None
+        
+        # Agent reference for accessing bound workspace
+        self.agent = None  # Will be set when tool is bound to agent
     
     def _log_info(self, message: str):
         """Log an info message if logging is enabled."""

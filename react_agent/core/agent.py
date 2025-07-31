@@ -73,6 +73,8 @@ class ReActAgent:
         
         # State
         self.tools: Dict[str, Tool] = {}
+        self.workspace = None  # Optional workspace binding
+        self._default_workspace_created = False  # Track if we created default workspace
         self.conversation_history: List[Dict[str, Any]] = []  # OpenAI API format
         self.detailed_history: List[Dict[str, Any]] = []     # Full interaction history
         self.total_tokens = 0
@@ -187,6 +189,9 @@ class ReActAgent:
             tool.enable_logging = True
             tool.agent_name = self.agent_name
         
+        # Set agent reference on the tool for hybrid workspace access
+        tool.agent = self
+        
         self.tools[tool.name] = tool
         
         self._log_info(f"🔧 Tool bound: {tool.name} - {tool.description}")
@@ -208,6 +213,59 @@ class ReActAgent:
         for tool in tools:
             self.bind_tool(tool)
         return self
+    
+    def bind_workspace(self, workspace) -> 'ReActAgent':
+        """
+        Bind a workspace to the agent for use as default workspace in tools.
+        
+        Args:
+            workspace: Workspace instance or workspace path string
+            
+        Returns:
+            Self for method chaining
+        """
+        from .workspace import Workspace
+        
+        if isinstance(workspace, str):
+            # Convert string path to Workspace instance
+            workspace = Workspace(workspace)
+        elif hasattr(workspace, 'root_path'):
+            # Already a workspace-like object
+            pass
+        else:
+            raise TypeError(f"Expected Workspace instance or string path, got {type(workspace)}")
+        
+        self.workspace = workspace
+        self._log_info(f"🗂️  Workspace bound: {workspace.root_path}")
+        
+        if self.debug:
+            print(f"Bound workspace: {workspace.root_path}")
+            
+        return self
+    
+    def _ensure_default_workspace(self):
+        """Ensure agent has a workspace, creating default if needed."""
+        if not self.workspace:
+            import os
+            from pathlib import Path
+            from .workspace import Workspace
+            
+            # Create default workspace under current working directory
+            default_path = Path.cwd() / f".agent_workspace_{self.agent_name}"
+            
+            try:
+                self.workspace = Workspace(default_path, create_if_missing=True)
+                self._default_workspace_created = True
+                self._log_info(f"🗂️  Created default workspace: {default_path}")
+                
+                if self.debug:
+                    print(f"Created default workspace: {default_path}")
+                    
+            except Exception as e:
+                self._log_error(f"Failed to create default workspace: {str(e)}")
+                if self.debug:
+                    print(f"Warning: Could not create default workspace: {e}")
+                # Continue without workspace - tools will work with absolute paths
     
     def unbind_tool(self, name: str) -> 'ReActAgent':
         """Remove a tool by name."""

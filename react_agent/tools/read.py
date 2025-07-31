@@ -1,4 +1,5 @@
 from typing import Optional
+from pathlib import Path
 try:
     import aiofiles
 except ImportError:
@@ -19,6 +20,20 @@ class ReadTool(Tool):
         file_path = self.get_param("file_path")
         start_line = self.get_param("start_line")
         end_line = self.get_param("end_line")
+        
+        # Ensure agent has workspace (create default if needed)
+        if hasattr(self, 'agent') and self.agent:
+            self.agent._ensure_default_workspace()
+            
+        # Apply workspace constraint if agent has bound workspace
+        if hasattr(self, 'agent') and self.agent and hasattr(self.agent, 'workspace') and self.agent.workspace:
+            try:
+                # Validate path is within workspace
+                validated_path = self.agent.workspace.validate_path(file_path)
+                file_path = str(validated_path)
+                self._log_info(f"Using workspace-constrained path: {file_path}")
+            except ValueError as e:
+                return f"Error: {str(e)}"
         
         try:
             if aiofiles:

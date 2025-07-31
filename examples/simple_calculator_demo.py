@@ -20,11 +20,7 @@ from react_agent.tools import CalculatorTool
 from react_agent.core.hierarchical_logger import get_hierarchical_logger
 
 
-# Configuration
-# api_key = "sk-F7H7KIfySwuMTHhG7234DaD189144f06A3B3Ac290eD7FeF4"
-# base_url = "http://43.153.16.183:888/v1/"
-
-api_key= "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"
+api_key = os.getenv("OPENROUTE_CLAUDE_KEY")
 base_url= "https://openrouter.ai/api/v1"
 
 model_name = "anthropic/claude-sonnet-4"
@@ -114,6 +110,10 @@ Be conversational and explain your reasoning clearly. When you have calculated t
         except Exception as e:
             print(f"\n❌ Error: {e}")
             print("Let's try again!\n")
+            
+    detailed = agent.get_detailed_history()
+    for entry in detailed:
+        print(entry)
 
 
 if __name__ == "__main__":
