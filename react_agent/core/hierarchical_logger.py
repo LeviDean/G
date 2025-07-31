@@ -11,6 +11,37 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 
 
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter that adds colors to log levels."""
+    
+    # ANSI color codes
+    COLORS = {
+        'GRAY': '\033[90m',      # Gray for INFO
+        'YELLOW': '\033[93m',    # Yellow for WARNING  
+        'RED': '\033[91m',       # Red for ERROR
+        'RESET': '\033[0m'       # Reset color
+    }
+    
+    def format(self, record):
+        # Apply color based on log level
+        if record.levelno == logging.INFO:
+            color = self.COLORS['GRAY']
+        elif record.levelno == logging.WARNING:
+            color = self.COLORS['YELLOW']
+        elif record.levelno >= logging.ERROR:
+            color = self.COLORS['RED']
+        else:
+            color = ''
+        
+        # Format the message
+        formatted = super().format(record)
+        
+        # Add color if we have one
+        if color:
+            return f"{color}{formatted}{self.COLORS['RESET']}"
+        return formatted
+
+
 class HierarchicalLogger:
     """
     A logger that automatically handles hierarchical indentation for multi-agent systems.
@@ -77,11 +108,11 @@ class HierarchicalLogger:
             if not logger.handlers:
                 handler = logging.StreamHandler()
                 
-                # Create formatter with proper indentation and level indicator
+                # Create colored formatter with proper indentation and level indicator
                 indent = self.indent_string * hierarchy_level
                 # level_indicator = f"[L{hierarchy_level}] " if hierarchy_level > 0 else ""
                 level_indicator = ""
-                formatter = logging.Formatter(
+                formatter = ColoredFormatter(
                     f'%(asctime)s - {indent}{level_indicator}{name} - %(levelname)s - %(message)s',
                     datefmt='%H:%M:%S'
                 )

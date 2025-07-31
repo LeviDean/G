@@ -6,7 +6,8 @@ from .read import ReadTool
 from .write import WriteTool
 from .edit import EditTool
 from .dispatch import SubAgentDispatchTool
+from .api_client import APIClientTool
 
 __all__ = [
-    "CalculatorTool", "ShellTool", "ReadTool", "WriteTool", "EditTool", "SubAgentDispatchTool"
+    "CalculatorTool", "ShellTool", "ReadTool", "WriteTool", "EditTool", "SubAgentDispatchTool", "APIClientTool"
 ]
