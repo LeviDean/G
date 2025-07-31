@@ -105,17 +105,24 @@ asyncio.run(desk_example())
 ## Creating Custom Tools
 
 ```python
-from react_agent import tool, param
+from react_agent.core.tool import Tool, tool, param
 
-@tool("weather")
-@param("location", "The city to get weather for")
-async def get_weather(location: str) -> str:
-    """Get current weather for a location."""
-    # Your implementation here
-    return f"Weather in {location}: Sunny, 75°F"
+@tool(name="weather", description="Get current weather for a location")
+class WeatherTool(Tool):
+    """A weather tool for getting current conditions."""
+    
+    @param("location", type="string", description="The city to get weather for")
+    async def _execute(self) -> str:
+        """Get current weather for a location."""
+        location = self.get_param("location")
+        
+        # Your implementation here
+        # e.g., call weather API
+        
+        return f"Weather in {location}: Sunny, 75°F"
 
 # Use the tool
-agent.bind_tools([get_weather])
+agent.bind_tools([WeatherTool()])
 ```
 
 ## Workspace Security
