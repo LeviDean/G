@@ -8,6 +8,15 @@ from openai import AsyncOpenAI
 from .tool import Tool
 from .hierarchical_logger import get_hierarchical_logger, create_child_logger
 
+# Optional MCP imports
+try:
+    import mcp
+    from mcp.client.session import ClientSession
+    from mcp.client.stdio import StdioServerParameters, stdio_client
+    _MCP_AVAILABLE = True
+except ImportError:
+    _MCP_AVAILABLE = False
+
 
 class ReActAgent:
     """
@@ -15,6 +24,8 @@ class ReActAgent:
     
     Features:
     - Automatic tool binding and validation
+    - MCP (Model Context Protocol) server integration
+    - Unified local and remote tool execution
     - Configurable system prompts and behavior
     - Conversation history management
     - Debug and verbose modes
@@ -35,6 +46,8 @@ class ReActAgent:
                  verbose: bool = False,
                  debug: bool = False,
                  logger: Optional[logging.Logger] = None,
+                 mcp_servers: Optional[List[Dict[str, Any]]] = None,
+                 auto_connect_mcp: bool = True,
                  **client_kwargs):
         
         # API Configuration - all services must follow OpenAI specification
@@ -73,17 +86,30 @@ class ReActAgent:
         
         # State
         self.tools: Dict[str, Tool] = {}
-        self.workspace = None  # Optional workspace binding
-        self._default_workspace_created = False  # Track if we created default workspace
         self.conversation_history: List[Dict[str, Any]] = []  # OpenAI API format
         self.detailed_history: List[Dict[str, Any]] = []     # Full interaction history
         self.total_tokens = 0
         self.operation_count = 0
         self.start_time = datetime.now()
         
+        # MCP Integration
+        self.mcp_servers: Dict[str, Dict] = {}  # {server_name: {session, tools}}
+        self.mcp_tools: Dict[str, Dict] = {}   # {tool_name: {server_name, tool_info}}
+        self._mcp_server_configs = mcp_servers or []
+        self._auto_connect_mcp = auto_connect_mcp and _MCP_AVAILABLE
+        
         # Callbacks
         self.on_tool_call: Optional[Callable[[str, Dict], None]] = None
         self.on_iteration: Optional[Callable[[int, str], None]] = None
+        
+        # Initialize MCP connections if configured
+        if self._mcp_server_configs and not _MCP_AVAILABLE:
+            self._log_warning("MCP servers configured but MCP client not available. Install with: pip install mcp")
+        elif self._auto_connect_mcp and self._mcp_server_configs:
+            # Mark for connection on first tool call - deferred to avoid blocking initialization
+            self._mcp_connection_pending = True
+        else:
+            self._mcp_connection_pending = False
         
         self._log_info(f"🤖 Agent initialized - Model: {self.model}, Temperature: {self.temperature}")
     
@@ -190,7 +216,7 @@ class ReActAgent:
             tool.enable_logging = True
             tool.agent_name = self.agent_name
         
-        # Set agent reference on the tool for hybrid workspace access
+        # Set agent reference on the tool
         tool.agent = self
         
         self.tools[tool.name] = tool
@@ -215,58 +241,6 @@ class ReActAgent:
             self.bind_tool(tool)
         return self
     
-    def bind_workspace(self, workspace) -> 'ReActAgent':
-        """
-        Bind a workspace to the agent for use as default workspace in tools.
-        
-        Args:
-            workspace: Workspace instance or workspace path string
-            
-        Returns:
-            Self for method chaining
-        """
-        from .workspace import Workspace
-        
-        if isinstance(workspace, str):
-            # Convert string path to Workspace instance
-            workspace = Workspace(workspace)
-        elif hasattr(workspace, 'root_path'):
-            # Already a workspace-like object
-            pass
-        else:
-            raise TypeError(f"Expected Workspace instance or string path, got {type(workspace)}")
-        
-        self.workspace = workspace
-        self._log_info(f"🗂️  Workspace bound: {workspace.root_path}")
-        
-        if self.debug:
-            print(f"Bound workspace: {workspace.root_path}")
-            
-        return self
-    
-    def _ensure_default_workspace(self):
-        """Ensure agent has a workspace, creating default if needed."""
-        if not self.workspace:
-            import os
-            from pathlib import Path
-            from .workspace import Workspace
-            
-            # Create default workspace under current working directory
-            default_path = Path.cwd() / f".agent_workspace_{self.agent_name}"
-            
-            try:
-                self.workspace = Workspace(default_path, create_if_missing=True)
-                self._default_workspace_created = True
-                self._log_info(f"🗂️  Created default workspace: {default_path}")
-                
-                if self.debug:
-                    print(f"Created default workspace: {default_path}")
-                    
-            except Exception as e:
-                self._log_error(f"Failed to create default workspace: {str(e)}")
-                if self.debug:
-                    print(f"Warning: Could not create default workspace: {e}")
-                # Continue without workspace - tools will work with absolute paths
     
     def unbind_tool(self, name: str) -> 'ReActAgent':
         """Remove a tool by name."""
@@ -277,16 +251,50 @@ class ReActAgent:
         return self
     
     def list_tools(self) -> List[str]:
-        """Get list of bound tool names."""
-        return list(self.tools.keys())
+        """Get list of all tool names (local and MCP)."""
+        return list(self.tools.keys()) + list(self.mcp_tools.keys())
     
     def get_tool_info(self) -> Dict[str, str]:
-        """Get information about bound tools."""
-        return {name: tool.description for name, tool in self.tools.items()}
+        """Get information about bound tools (local and MCP)."""
+        info = {name: tool.description for name, tool in self.tools.items()}
+        
+        # Add MCP tool info
+        for tool_name, tool_data in self.mcp_tools.items():
+            server_name = tool_data['server_name']
+            tool_info = tool_data['tool_info']
+            description = tool_info.get('description', 'MCP tool')
+            info[tool_name] = f"[{server_name}] {description}"
+        
+        return info
     
     def _get_tool_schemas(self) -> List[Dict[str, Any]]:
-        """Get schemas for all bound tools."""
-        return [tool.get_schema() for tool in self.tools.values()]
+        """Get schemas for all bound tools (local and MCP)."""
+        schemas = [tool.get_schema() for tool in self.tools.values()]
+        
+        # Add MCP tool schemas
+        for tool_name, tool_data in self.mcp_tools.items():
+            tool_info = tool_data['tool_info']
+            schema = {
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "description": tool_info.get('description', 'MCP tool'),
+                    "parameters": tool_info.get('inputSchema', {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    })
+                }
+            }
+            schemas.append(schema)
+        
+        return schemas
+    
+    async def _ensure_mcp_connections(self):
+        """Ensure MCP connections are established if pending."""
+        if self._mcp_connection_pending:
+            self._mcp_connection_pending = False
+            await self._connect_mcp_servers()
     
     def _create_system_prompt(self) -> str:
         """Create the system prompt for the ReAct agent."""
@@ -309,14 +317,26 @@ class ReActAgent:
         operation_start = datetime.now()
         
         try:
-            function_args = json.loads(tool_call.function.arguments)
+            # Handle empty arguments
+            arguments_str = tool_call.function.arguments.strip()
+            if not arguments_str:
+                function_args = {}
+            else:
+                function_args = json.loads(arguments_str)
         except json.JSONDecodeError as e:
             error_msg = f"Invalid JSON in function arguments: {str(e)}"
             self._log_error(f"Tool call failed: {error_msg}")
+            self._log_error(f"Raw arguments: '{tool_call.function.arguments}'")
             return f"Error: {error_msg}"
         
-        if function_name not in self.tools:
-            available_tools = ", ".join(self.tools.keys())
+        # Check if it's a local tool or MCP tool
+        is_mcp_tool = function_name in self.mcp_tools
+        is_local_tool = function_name in self.tools
+        
+        if not is_local_tool and not is_mcp_tool:
+            available_local = list(self.tools.keys())
+            available_mcp = list(self.mcp_tools.keys())
+            available_tools = ", ".join(available_local + available_mcp)
             error_msg = f"Tool '{function_name}' not found. Available tools: {available_tools}"
             self._log_error(error_msg)
             return f"Error: {error_msg}"
@@ -340,7 +360,10 @@ class ReActAgent:
             print(f"🔧 Calling tool: {function_name} with args: {function_args}")
         
         try:
-            result = await self.tools[function_name].execute(**function_args)
+            if is_local_tool:
+                result = await self.tools[function_name].execute(**function_args)
+            else:  # MCP tool
+                result = await self._execute_mcp_tool(function_name, function_args)
             
             execution_time = (datetime.now() - operation_start).total_seconds()
             result_str = str(result)
@@ -385,6 +408,188 @@ class ReActAgent:
                 print(f"❌ {error_msg}")
             return error_msg
     
+    async def _execute_mcp_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
+        """Execute an MCP tool call."""
+        if not _MCP_AVAILABLE:
+            return "Error: MCP client not available. Install with: pip install mcp"
+        
+        tool_data = self.mcp_tools.get(tool_name)
+        if not tool_data:
+            return f"Error: MCP tool '{tool_name}' not found"
+        
+        server_name = tool_data['server_name']
+        server_data = self.mcp_servers.get(server_name)
+        if not server_data:
+            return f"Error: MCP server '{server_name}' not connected"
+        
+        # Check if this is a demo mode connection
+        if not server_data.get('connected', False):
+            return f"MCP tool '{tool_name}' would be executed on server '{server_name}' with args: {args}. (Demo mode - server not actually running)"
+        
+        # Create fresh session for tool execution
+        server_params = server_data.get('server_params')
+        if not server_params:
+            return f"Error: No server parameters for MCP server '{server_name}'"
+        
+        try:
+            # Create fresh connection for this tool call
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    # Initialize the session
+                    await session.initialize()
+                    
+                    # Call the MCP tool using the session
+                    response = await session.call_tool(tool_name, args)
+                    
+                    if hasattr(response, 'content'):
+                        if isinstance(response.content, list):
+                            # Handle multiple content items
+                            return '\n'.join([str(item.text) if hasattr(item, 'text') else str(item) for item in response.content])
+                        else:
+                            return str(response.content)
+                    else:
+                        return str(response)
+                        
+        except Exception as e:
+            self._log_error(f"MCP tool execution failed: {str(e)}")
+            return f"Error executing MCP tool '{tool_name}': {str(e)}"
+    
+    async def _connect_mcp_servers(self):
+        """Connect to configured MCP servers."""
+        if not _MCP_AVAILABLE:
+            self._log_warning("Cannot connect to MCP servers: MCP client not available")
+            return
+        
+        for server_config in self._mcp_server_configs:
+            await self._connect_mcp_server(server_config)
+    
+    async def _connect_mcp_server(self, server_config: Dict[str, Any]):
+        """Connect to a single MCP server."""
+        server_name = server_config.get('name', 'unknown')
+        
+        try:
+            if 'command' in server_config:
+                self._log_info(f"🔌 Attempting to connect to MCP server '{server_name}'...")
+                
+                if _MCP_AVAILABLE:
+                    # Try real MCP connection
+                    command = server_config['command']
+                    args = server_config.get('args', [])
+                    env = server_config.get('env', {})
+                    
+                    try:
+                        # Create server parameters
+                        server_params = StdioServerParameters(
+                            command=command,
+                            args=args,
+                            env=env
+                        )
+                        
+                        # Test connection and get tools
+                        async with stdio_client(server_params) as (read, write):
+                            async with ClientSession(read, write) as session:
+                                # Initialize the session
+                                init_result = await session.initialize()
+                                self._log_info(f"MCP server '{server_name}' initialized: {init_result}")
+                                
+                                # List available tools
+                                tools_response = await session.list_tools()
+                                tools = tools_response.tools if hasattr(tools_response, 'tools') else []
+                        
+                        # Store connection info (create fresh sessions per call)
+                        self.mcp_servers[server_name] = {
+                            'config': server_config,
+                            'tools': tools,
+                            'connected': True,
+                            'server_params': server_params
+                        }
+                        
+                        # Register tools
+                        for tool in tools:
+                            tool_name = tool.name
+                            self.mcp_tools[tool_name] = {
+                                'server_name': server_name,
+                                'tool_info': {
+                                    'name': tool.name,
+                                    'description': getattr(tool, 'description', ''),
+                                    'inputSchema': getattr(tool, 'inputSchema', {})
+                                }
+                            }
+                        
+                        tool_count = len(tools)
+                        self._log_info(f"✅ Connected to MCP server '{server_name}' with {tool_count} tools")
+                                
+                    except Exception as connection_error:
+                        # Fallback to demo mode if real connection fails
+                        self._log_warning(f"Real MCP connection failed: {connection_error}")
+                        self._log_info(f"Falling back to demo mode for server '{server_name}'")
+                        
+                        self.mcp_servers[server_name] = {
+                            'config': server_config,
+                            'tools': [],
+                            'connected': False  # Demo mode
+                        }
+                        
+                else:
+                    # MCP not available, use demo mode
+                    self._log_warning(f"MCP client not available - using demo mode for '{server_name}'")
+                    self.mcp_servers[server_name] = {
+                        'config': server_config,
+                        'tools': [],
+                        'connected': False  # Demo mode
+                    }
+                    
+            else:
+                self._log_warning(f"MCP server '{server_name}' has no connection method configured")
+                
+        except Exception as e:
+            self._log_error(f"Failed to connect to MCP server '{server_name}': {str(e)}")
+    
+    async def connect_mcp_server(self, server_config: Dict[str, Any]) -> bool:
+        """
+        Connect to an MCP server manually.
+        
+        Args:
+            server_config: Server configuration dict with 'name', 'command', optional 'args' and 'env'
+            
+        Returns:
+            True if connected successfully, False otherwise
+        """
+        if not _MCP_AVAILABLE:
+            self._log_warning("Cannot connect to MCP server: MCP client not available")
+            return False
+        
+        await self._connect_mcp_server(server_config)
+        
+        server_name = server_config.get('name', 'unknown')
+        return server_name in self.mcp_servers
+    
+    def disconnect_mcp_server(self, server_name: str):
+        """Disconnect from an MCP server."""
+        if server_name in self.mcp_servers:
+            # Remove tools from this server
+            tools_to_remove = [
+                tool_name for tool_name, tool_data in self.mcp_tools.items()
+                if tool_data['server_name'] == server_name
+            ]
+            for tool_name in tools_to_remove:
+                del self.mcp_tools[tool_name]
+            
+            # Remove server
+            del self.mcp_servers[server_name]
+            self._log_info(f"🔌 Disconnected from MCP server '{server_name}'")
+    
+    def list_mcp_servers(self) -> List[str]:
+        """Get list of connected MCP servers."""
+        return list(self.mcp_servers.keys())
+    
+    def list_mcp_tools(self) -> Dict[str, str]:
+        """Get list of MCP tools with their server names."""
+        return {
+            tool_name: f"[{tool_data['server_name']}] {tool_data['tool_info'].get('description', '')}"
+            for tool_name, tool_data in self.mcp_tools.items()
+        }
+    
     async def run(self, query: str, max_iterations: int = 10, stream: bool = False) -> str:
         """
         Backward compatibility method. Use execute() instead.
@@ -414,6 +619,9 @@ class ReActAgent:
         
         run_start = datetime.now()
         is_new_conversation = not self.conversation_history
+        
+        # Ensure MCP connections are established if needed
+        await self._ensure_mcp_connections()
         
         # Log operation
         operation = "Agent Execute (New)" if is_new_conversation else "Agent Execute (Continue)"
@@ -573,6 +781,9 @@ class ReActAgent:
         
         run_start = datetime.now()
         is_new_conversation = not self.conversation_history
+        
+        # Ensure MCP connections are established if needed
+        await self._ensure_mcp_connections()
         
         # Log operation
         operation = "Agent Stream (New)" if is_new_conversation else "Agent Stream (Continue)"

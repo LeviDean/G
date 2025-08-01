@@ -6,11 +6,13 @@ A Python framework for building ReAct (Reasoning + Acting) agents that can use t
 
 - 🤖 **ReAct Pattern**: Combines reasoning and acting for intelligent problem-solving
 - 🛠️ **Tool Integration**: Easy-to-use decorator-based tool system
-- 🔒 **Secure Workspaces**: Sandboxed file operations with path validation
+- 🔌 **MCP Integration**: Connect to external MCP (Model Context Protocol) servers
+- 🌐 **Unified Tool Ecosystem**: Seamlessly use local and remote tools together
+- 🔒 **Secure File Operations**: Sandboxed via MCP filesystem servers
 - 🌊 **Streaming Support**: Real-time responses with progress updates
-- 🏢 **Desk Interface**: Simple session management with conversation recording
 - 📊 **Detailed Logging**: Complete interaction history and statistics
 - 🔄 **Unified API**: Auto-detecting conversation state for seamless interactions
+- 🎮 **Interactive Demo**: Code Agent interface with colored output
 
 ## Quick Start
 
@@ -21,35 +23,38 @@ A Python framework for building ReAct (Reasoning + Acting) agents that can use t
 git clone <repository-url>
 cd react-agent
 
-# Install dependencies (if any)
+# Install Python dependencies
 pip install openai aiohttp
+
+# Install MCP support (optional - for file operations)
+pip install mcp
+npm install -g @modelcontextprotocol/server-filesystem
 ```
 
-### Basic Usage
+### Quick Start
 
 ```python
 import asyncio
-from react_agent import ReActAgent
-from react_agent.tools import CalculatorTool
+from react_agent import create_simple_agent, create_mcp_agent
 
 async def main():
-    # Create agent
-    agent = ReActAgent(
-        system_prompt="You are a helpful assistant.",
-        api_key="your-openai-api-key",
-        model="gpt-4"
+    # Simple agent with calculator
+    simple_agent = create_simple_agent("You are a helpful calculator assistant.")
+    response = await simple_agent.execute("Calculate 15 * 23 + 100")
+    print(response)
+    
+    # MCP agent with file operations
+    mcp_agent = create_mcp_agent(
+        "You can do calculations and file operations.",
+        mcp_servers=[{
+            "name": "filesystem", 
+            "command": "npx",
+            "args": ["@modelcontextprotocol/server-filesystem", "/workspace"]
+        }]
     )
     
-    # Add tools
-    agent.bind_tools([CalculatorTool()])
-    
-    # Simple conversation
-    response = await agent.execute("Calculate 15 * 23 + 100")
-    print(response)  # "The result is 445"
-    
-    # Follow-up (automatically continues conversation)
-    response = await agent.execute("What's the square root of that?")
-    print(response)  # "The square root of 445 is approximately 21.1"
+    response = await mcp_agent.execute("Calculate 25*4 and save result to calc.txt")
+    print(response)
 
 asyncio.run(main())
 ```
@@ -70,37 +75,102 @@ async def streaming_example():
 asyncio.run(streaming_example())
 ```
 
-### Desk Interface (Session Management)
+### Interactive Code Agent Demo
 
-```python
-from react_agent import Desk
+Experience a Claude Code-like interface with the ReAct Agent:
 
-async def desk_example():
-    # Create desk with automatic session recording
-    desk = Desk(agent)
-    
-    # Chat with streaming
-    async for update in desk.chat_stream("Hello! Can you help with math?"):
-        if update["type"] == "thinking":
-            print(update["content"], end="")
-    
-    # Get session statistics
-    stats = desk.get_session_stats()
-    print(f"Total messages: {stats['total_messages']}")
-    print(f"Agent used {stats['agent_details']['total_tool_calls']} tools")
+```bash
+# Install MCP filesystem server (required for file operations)
+npm install -g @modelcontextprotocol/server-filesystem
 
-asyncio.run(desk_example())
+# Set your API key
+export OPENROUTE_CLAUDE_KEY="your_key"  # or OPENAI_API_KEY
+
+# Run the interactive demo
+python examples/code_agent_demo.py
 ```
 
-## Available Tools
+**Features:**
+- 🟢 **Colored output**: Green user input, yellow agent responses
+- 📁 **File operations**: Create, read, edit, list files in sandboxed workspace
+- 🧮 **Calculations**: Built-in calculator for math operations
+- 🔧 **Commands**: `/help`, `/ls`, `/clear`, `/quit`
+- 🌊 **Real-time streaming**: See the agent think in real-time
 
+**Example commands:**
+- "Create a Python script that plots a cosine curve"
+- "List all files in the workspace"
+- "Calculate the factorial of 10"
+- "Debug this Python error: NameError"
+
+### MCP (Model Context Protocol) Integration
+
+Connect to external MCP servers for enhanced functionality:
+
+```python
+async def mcp_example():
+    # Configure MCP servers
+    mcp_servers = [
+        {
+            "name": "filesystem",
+            "command": "mcp-server-filesystem",
+            "args": ["/workspace"]
+        },
+        {
+            "name": "web",
+            "command": "mcp-server-brave-search",
+            "env": {"BRAVE_API_KEY": "your_api_key"}
+        }
+    ]
+    
+    # Agent with MCP integration
+    agent = ReActAgent(
+        system_prompt="You are a helpful assistant with web search and file access.",
+        mcp_servers=mcp_servers,     # Auto-connect on startup
+        auto_connect_mcp=True        # Enable auto-connection
+    )
+    
+    # The agent now has access to both local and MCP server tools
+    response = await agent.execute("Search for recent AI news and save to a file")
+    
+    # Manual MCP server connection
+    weather_server = {
+        "name": "weather",
+        "command": "mcp-server-weather",
+        "args": ["--api-key", "your_weather_key"]
+    }
+    
+    success = await agent.connect_mcp_server(weather_server)
+    if success:
+        print("Weather server connected!")
+    
+    # List all available tools (local + MCP)
+    print("Available tools:", agent.list_tools())
+    print("MCP servers:", agent.list_mcp_servers())
+    print("MCP tools:", agent.list_mcp_tools())
+
+asyncio.run(mcp_example())
+```
+
+**Installation for MCP support:**
+```bash
+pip install mcp  # Optional - only needed for MCP integration
+```
+
+## Architecture
+
+### **Local Tools** 
+Built-in tools that run in the agent process:
 - **CalculatorTool**: Mathematical calculations
-- **ReadTool**: Read files from workspace
-- **WriteTool**: Write files to workspace  
-- **EditTool**: Edit files using diff-based operations
-- **SubAgentDispatchTool**: Delegate tasks to specialized sub-agents
-- **ShellTool**: Execute shell commands (use with caution)
-- **APIClientTool**: Make HTTP requests to external APIs
+- **SubAgentDispatchTool**: Delegate tasks to specialized agents
+
+### **MCP Tools (External)**
+External capabilities via MCP servers:
+- **Filesystem Server**: File operations (read, write, edit, list)
+- **Web Search Server**: Internet search 
+- **Database Server**: SQLite operations
+- **GitHub Server**: Repository operations
+- **Custom Servers**: Build your own MCP servers
 
 ## Creating Custom Tools
 
@@ -125,33 +195,34 @@ class WeatherTool(Tool):
 agent.bind_tools([WeatherTool()])
 ```
 
-## Workspace Security
+## File Operations
+
+File operations are handled by MCP filesystem servers with built-in security:
 
 ```python
-# Secure workspace for file operations
-agent.bind_workspace("./safe_directory")
+# MCP filesystem server with workspace restriction
+mcp_servers = [{
+    "name": "filesystem",
+    "command": "npx", 
+    "args": ["@modelcontextprotocol/server-filesystem", "/safe_workspace"]
+}]
 
-# Tools automatically validate paths
-await agent.execute("Create a file called data.txt with some content")
-# ✅ Creates ./safe_directory/data.txt
+agent = create_mcp_agent("File assistant", mcp_servers)
 
-await agent.execute("Read /etc/passwd") 
-# ❌ Blocked - outside workspace
+# Operations are restricted to /safe_workspace
+await agent.execute("Create file data.txt with some content")  # ✅ Allowed
+await agent.execute("Read /etc/passwd")  # ❌ Blocked by MCP server
 ```
 
-## Interactive Demo
+## Interactive Demos
 
 ```bash
-python examples/desk_demo.py
-```
+# Quick start with agent types
+python examples/quick_start.py
 
-Available commands:
-- `/help` - Show available commands
-- `/stats` - Session statistics  
-- `/details` - Agent's detailed history
-- `/export` - Export conversation
-- `/reset` - Clear history
-- `/quit` - Exit
+# Interactive Code Agent (like Claude Code)
+python examples/code_agent_demo.py
+```
 
 ## API Reference
 
@@ -164,15 +235,15 @@ Available commands:
 | `run(query)` | Forces new conversation | When you need fresh start |
 | `chat(message)` | Forces continuation | When you need to continue |
 
-### Desk Methods
+### MCP Methods
 
 | Method | Description |
 |--------|-------------|
-| `chat(message)` | Simple chat (non-streaming) |
-| `chat_stream(message)` | Chat with streaming |
-| `get_session_stats()` | Session and agent statistics |
-| `get_agent_detailed_history()` | Complete interaction history |
-| `export_conversation()` | Export as markdown/JSON |
+| `connect_mcp_server(config)` | Connect to an MCP server manually |
+| `disconnect_mcp_server(name)` | Disconnect from an MCP server |
+| `list_mcp_servers()` | Get list of connected MCP servers |
+| `list_mcp_tools()` | Get list of available MCP tools |
+
 
 ## Configuration
 
@@ -194,6 +265,58 @@ agent = ReActAgent(
     temperature=0.1,
     max_tokens=4000,
     verbose=True,  # Debug output
-    debug=True     # Detailed debugging
+    debug=True,    # Detailed debugging
+    
+    # MCP Integration (optional)
+    mcp_servers=[
+        {
+            "name": "server_name",
+            "command": "mcp-server-command",
+            "args": ["--option", "value"],
+            "env": {"API_KEY": "value"}
+        }
+    ],
+    auto_connect_mcp=True  # Auto-connect on startup
 )
+```
+
+### MCP Server Configuration
+
+MCP servers are configured with a dictionary containing:
+- `name`: Unique identifier for the server
+- `command`: Command to start the MCP server process
+- `args`: Command line arguments (optional)
+- `env`: Environment variables (optional)
+
+**Common MCP Servers:**
+```python
+mcp_servers = [
+    # File system access
+    {
+        "name": "filesystem",
+        "command": "mcp-server-filesystem",
+        "args": ["/workspace"]
+    },
+    
+    # Web search with Brave
+    {
+        "name": "brave_search", 
+        "command": "mcp-server-brave-search",
+        "env": {"BRAVE_API_KEY": "your_key"}
+    },
+    
+    # GitHub integration
+    {
+        "name": "github",
+        "command": "mcp-server-github",
+        "env": {"GITHUB_TOKEN": "your_token"}
+    },
+    
+    # SQLite database
+    {
+        "name": "sqlite",
+        "command": "mcp-server-sqlite",
+        "args": ["--db-path", "/path/to/database.db"]
+    }
+]
 ```
