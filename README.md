@@ -86,7 +86,7 @@ npm install -g @modelcontextprotocol/server-filesystem
 # Set your API key
 export OPENROUTE_CLAUDE_KEY="your_key"  # or OPENAI_API_KEY
 
-# Run the interactive demo
+# Run the interactive demo (MCP server starts automatically)
 python examples/code_agent_demo.py
 ```
 

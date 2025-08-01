@@ -22,10 +22,8 @@ from react_agent import create_mcp_agent
 class CodeAgentDemo:
     def __init__(self):
         self.agent = None
-        # Get parent directory for workspace
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        parent_dir = os.path.dirname(current_dir)
-        self.workspace = os.path.abspath(os.path.join(parent_dir, "tmp", "code_workspace"))
+        # Create workspace in current working directory
+        self.workspace = os.path.abspath("./")
         self.setup_workspace()
         
     def setup_workspace(self):
@@ -44,14 +42,18 @@ class CodeAgentDemo:
         model = "anthropic/claude-sonnet-4" if os.getenv("OPENROUTE_CLAUDE_KEY") else "gpt-4"
         
         self.agent = create_mcp_agent(
-            system_prompt="""You are a Code Agent assistant. You can:
-- Read, write, and analyze code files
+            system_prompt=f"""You are a Code Agent assistant. Your workspace is {self.workspace}.
+
+IMPORTANT: All file operations must be within the workspace directory. When creating files, use just the filename (e.g., "sort.py") and the MCP filesystem server will place it in the correct workspace location.
+
+You can:
+- Read, write, and analyze code files within the workspace
 - Perform calculations and data processing
-- Execute file operations (create, edit, list, search)
+- Execute file operations (create, edit, list, search) within the workspace
 - Help with programming tasks and debugging
 - Explain code and provide recommendations
 
-Always be concise and practical. Show file paths when working with files.""",
+Always be concise and practical. Use relative file paths when working with files.""",
             mcp_servers=[{
                 "name": "filesystem",
                 "command": "npx",
