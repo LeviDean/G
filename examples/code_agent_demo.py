@@ -17,7 +17,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
-from react_agent import create_mcp_agent
+from react_agent import create_interactive_agent
 
 class CodeAgentDemo:
     def __init__(self):
@@ -41,7 +41,7 @@ class CodeAgentDemo:
         base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTE_CLAUDE_KEY") else None
         model = "anthropic/claude-sonnet-4" if os.getenv("OPENROUTE_CLAUDE_KEY") else "gpt-4"
         
-        self.agent = create_mcp_agent(
+        self.agent = create_interactive_agent(
             system_prompt=f"""You are a Code Agent assistant. Your workspace is {self.workspace}.
 
 IMPORTANT: All file operations must be within the workspace directory. When creating files, use just the filename (e.g., "sort.py") and the MCP filesystem server will place it in the correct workspace location.
@@ -63,7 +63,6 @@ Always be concise and practical. Use relative file paths when working with files
             base_url=base_url,
             model=model,
             temperature=0.1,
-            verbose=False,
             debug=False
         )
         
@@ -83,12 +82,16 @@ Always be concise and practical. Use relative file paths when working with files
         print("  🧮 Calculations and data processing")
         print("  🔍 Code analysis and debugging")
         print("  💡 Programming assistance")
+        print("  🔐 Interactive tool permissions")
+        print("  ⚡ Real-time streaming responses")
         print("\nNote: MCP server messages above are normal startup output.")
         print("\nCommands:")
         print("  /help    - Show this help")
         print("  /ls      - List workspace files")
         print("  /clear   - Clear screen")
         print("  /quit    - Exit")
+        print("\n💡 TIP: When prompted for tool permissions, choose:")
+        print("  1 - Allow once  |  2 - Allow always  |  3 - Deny")
         print("="*60)
     
     def print_help(self):
@@ -168,26 +171,18 @@ Always be concise and practical. Use relative file paths when working with files
                         continue
                     
                     # Process with agent with yellow color
-                    print("\033[33m🤖 Code Agent:\n\033[0m", end=" ", flush=True)
+                    print("\033[33m🤖 Code Agent:\033[0m")
                     
                     try:
-                        # Stream response for real-time feedback
-                        response_parts = []
-                        async for update in self.agent.stream(user_input):
-                            if update["type"] == "thinking":
-                                print(f"\033[33m{update['content']}\033[0m", end="", flush=True)
-                                response_parts.append(update["content"])
-                            elif update["type"] == "tool_call":
-                                print(f"\n   🔧 {update['content']}", flush=True)
-                            elif update["type"] == "tool_result":
-                                print(f"   ✅ {update['content'][:100]}{'...' if len(update['content']) > 100 else ''}")
-                        
-                        if not response_parts:
-                            response = await self.agent.execute(user_input)
-                            print(f"\033[33m{response}\033[0m")
+                        # Use interactive execution for real-time updates and permissions
+                        response = await self.agent.execute_interactive(user_input)
+                        # Ensure a small delay for any remaining output to complete
+                        await asyncio.sleep(0.2)
+                        print()  # Add a newline for clean separation
                             
                     except Exception as e:
                         print(f"\n❌ Error: {e}")
+                        await asyncio.sleep(0.1)
                         
                 except KeyboardInterrupt:
                     print("\n\n⏸️  Use /quit to exit or continue...")

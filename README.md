@@ -1,322 +1,165 @@
 # ReAct Agent Framework
 
-A Python framework for building ReAct (Reasoning + Acting) agents that can use tools to solve complex problems through iterative reasoning and action.
-
-## Features
-
-- 🤖 **ReAct Pattern**: Combines reasoning and acting for intelligent problem-solving
-- 🛠️ **Tool Integration**: Easy-to-use decorator-based tool system
-- 🔌 **MCP Integration**: Connect to external MCP (Model Context Protocol) servers
-- 🌐 **Unified Tool Ecosystem**: Seamlessly use local and remote tools together
-- 🔒 **Secure File Operations**: Sandboxed via MCP filesystem servers
-- 🌊 **Streaming Support**: Real-time responses with progress updates
-- 📊 **Detailed Logging**: Complete interaction history and statistics
-- 🔄 **Unified API**: Auto-detecting conversation state for seamless interactions
-- 🎮 **Interactive Demo**: Code Agent interface with colored output
+A clean, elegant Python framework for building ReAct (Reasoning + Acting) agents with real-time interaction.
 
 ## Quick Start
 
-### Installation
-
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd react-agent
-
-# Install Python dependencies
 pip install openai aiohttp
-
-# Install MCP support (optional - for file operations)
-pip install mcp
-npm install -g @modelcontextprotocol/server-filesystem
 ```
-
-### Quick Start
 
 ```python
 import asyncio
-from react_agent import create_simple_agent, create_mcp_agent
+from react_agent import ReActAgent
 
 async def main():
-    # Simple agent with calculator
-    simple_agent = create_simple_agent("You are a helpful calculator assistant.")
-    response = await simple_agent.execute("Calculate 15 * 23 + 100")
-    print(response)
-    
-    # MCP agent with file operations
-    mcp_agent = create_mcp_agent(
-        "You can do calculations and file operations.",
-        mcp_servers=[{
-            "name": "filesystem", 
-            "command": "npx",
-            "args": ["@modelcontextprotocol/server-filesystem", "/workspace"]
-        }]
+    agent = ReActAgent(
+        system_prompt="You are a helpful assistant.",
+        interactive=True  # Enable real-time features
     )
-    
-    response = await mcp_agent.execute("Calculate 25*4 and save result to calc.txt")
+    response = await agent.execute_interactive("Calculate 15 * 23 + 100")
     print(response)
 
 asyncio.run(main())
 ```
 
-### Streaming Responses
+## Building Your Agent
 
+The framework provides one `ReActAgent` class that you configure for your needs:
+
+### Basic Agent
 ```python
-async def streaming_example():
-    # Real-time streaming responses
-    async for update in agent.stream("Calculate complex math and explain"):
-        if update["type"] == "thinking":
-            print(update["content"], end="", flush=True)
-        elif update["type"] == "tool_call":
-            print(f"\n🔧 {update['content']}")
-        elif update["type"] == "tool_result":
-            print(f"✅ {update['content']}")
+from react_agent import ReActAgent
 
-asyncio.run(streaming_example())
+agent = ReActAgent(
+    system_prompt="You are a Python coding expert.",
+    api_key="your-key",
+    model="gpt-4",
+    temperature=0.1
+)
+
+response = await agent.execute("Write a sorting algorithm")
 ```
 
-### Interactive Code Agent Demo
+### Interactive Agent (Real-time streaming)
+```python
+agent = ReActAgent(
+    system_prompt="You are a coding assistant.",
+    interactive=True  # Enables streaming, permissions, color output
+)
 
-Experience a Claude Code-like interface with the ReAct Agent:
+# Real-time streaming execution
+response = await agent.execute_interactive("Create a web scraper")
+```
+
+### Agent with File Access
+```python
+agent = ReActAgent(
+    system_prompt="You are a code assistant with file access.",
+    interactive=True,
+    mcp_servers=[{
+        "name": "filesystem",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "/workspace"]
+    }]
+)
+```
+
+### Adding Custom Tools
+```python
+from react_agent.core.tool import Tool, tool, param
+
+@tool(name="weather", description="Get weather information")
+class WeatherTool(Tool):
+    @param("city", type="string", description="City name")
+    async def _execute(self) -> str:
+        city = self.get_param("city")
+        return f"Weather in {city}: Sunny, 75°F"
+
+agent.bind_tool(WeatherTool())
+```
+
+## Features
+
+- **⚡ Real-time Streaming** - See agent thinking live with color coding
+- **🔐 Smart Permissions** - Interactive tool approval (once/always/deny)
+- **🔧 Parallel Execution** - Multiple tools run concurrently
+- **📁 File Operations** - Secure sandboxed access via MCP servers
+- **🧮 Built-in Tools** - Calculator and agent dispatch included
+
+## Interactive Experience
+
+When `interactive=True`:
+
+- 🟢 **Green** user input
+- ⚫ **Gray** working status and tool calls  
+- ⚪ **White** final agent responses
+- 🔐 **Tool permissions** prompt on first use
+
+## Examples & Demos
+
+We provide examples showing different ways to use the framework:
 
 ```bash
-# Install MCP filesystem server (required for file operations)
-npm install -g @modelcontextprotocol/server-filesystem
+export OPENAI_API_KEY="your_key"
 
-# Set your API key
-export OPENROUTE_CLAUDE_KEY="your_key"  # or OPENAI_API_KEY
-
-# Run the interactive demo (MCP server starts automatically)
+# Code Agent Demo - interactive file operations
 python examples/code_agent_demo.py
+
+# Quick Start Examples - different configurations
+python examples/quick_start.py
+
+# Interactive Features Demo - streaming, permissions
+python examples/interactive_demo.py
 ```
 
-**Features:**
-- 🟢 **Colored output**: Green user input, yellow agent responses
-- 📁 **File operations**: Create, read, edit, list files in sandboxed workspace
-- 🧮 **Calculations**: Built-in calculator for math operations
-- 🔧 **Commands**: `/help`, `/ls`, `/clear`, `/quit`
-- 🌊 **Real-time streaming**: See the agent think in real-time
+### Convenience Factory Functions
 
-**Example commands:**
-- "Create a Python script that plots a cosine curve"
-- "List all files in the workspace"
-- "Calculate the factorial of 10"
-- "Debug this Python error: NameError"
-
-### MCP (Model Context Protocol) Integration
-
-Connect to external MCP servers for enhanced functionality:
+For common patterns, we provide factory functions:
 
 ```python
-async def mcp_example():
-    # Configure MCP servers
-    mcp_servers = [
-        {
-            "name": "filesystem",
-            "command": "mcp-server-filesystem",
-            "args": ["/workspace"]
-        },
-        {
-            "name": "web",
-            "command": "mcp-server-brave-search",
-            "env": {"BRAVE_API_KEY": "your_api_key"}
-        }
-    ]
-    
-    # Agent with MCP integration
-    agent = ReActAgent(
-        system_prompt="You are a helpful assistant with web search and file access.",
-        mcp_servers=mcp_servers,     # Auto-connect on startup
-        auto_connect_mcp=True        # Enable auto-connection
-    )
-    
-    # The agent now has access to both local and MCP server tools
-    response = await agent.execute("Search for recent AI news and save to a file")
-    
-    # Manual MCP server connection
-    weather_server = {
-        "name": "weather",
-        "command": "mcp-server-weather",
-        "args": ["--api-key", "your_weather_key"]
-    }
-    
-    success = await agent.connect_mcp_server(weather_server)
-    if success:
-        print("Weather server connected!")
-    
-    # List all available tools (local + MCP)
-    print("Available tools:", agent.list_tools())
-    print("MCP servers:", agent.list_mcp_servers())
-    print("MCP tools:", agent.list_mcp_tools())
+from react_agent import create_interactive_agent, create_simple_agent, create_mcp_agent
 
-asyncio.run(mcp_example())
-```
-
-**Installation for MCP support:**
-```bash
-pip install mcp  # Optional - only needed for MCP integration
+# These are shortcuts for common ReActAgent configurations:
+agent = create_interactive_agent("prompt")  # interactive=True
+agent = create_simple_agent("prompt")       # basic configuration  
+agent = create_mcp_agent("prompt", servers) # with MCP servers
 ```
 
 ## Architecture
 
-### **Local Tools** 
-Built-in tools that run in the agent process:
-- **CalculatorTool**: Mathematical calculations
-- **SubAgentDispatchTool**: Delegate tasks to specialized agents
+**Core Class:**
+- `ReActAgent` - The main agent class you configure
 
-### **MCP Tools (External)**
-External capabilities via MCP servers:
-- **Filesystem Server**: File operations (read, write, edit, list)
-- **Web Search Server**: Internet search 
-- **Database Server**: SQLite operations
-- **GitHub Server**: Repository operations
-- **Custom Servers**: Build your own MCP servers
+**Built-in Tools:**
+- `calculator` - Math operations
+- `dispatch` - Delegate to specialized sub-agents
 
-## Creating Custom Tools
+**External Tools (via MCP):**
+- File operations, web search, databases, APIs
+- Custom MCP servers
 
-```python
-from react_agent.core.tool import Tool, tool, param
+**Real-time System:**
+- Streaming responses with live thinking
+- Interactive tool permissions
+- Parallel tool execution
+- Clean color-coded output
 
-@tool(name="weather", description="Get current weather for a location")
-class WeatherTool(Tool):
-    """A weather tool for getting current conditions."""
-    
-    @param("location", type="string", description="The city to get weather for")
-    async def _execute(self) -> str:
-        """Get current weather for a location."""
-        location = self.get_param("location")
-        
-        # Your implementation here
-        # e.g., call weather API
-        
-        return f"Weather in {location}: Sunny, 75°F"
-
-# Use the tool
-agent.bind_tools([WeatherTool()])
-```
-
-## File Operations
-
-File operations are handled by MCP filesystem servers with built-in security:
-
-```python
-# MCP filesystem server with workspace restriction
-mcp_servers = [{
-    "name": "filesystem",
-    "command": "npx", 
-    "args": ["@modelcontextprotocol/server-filesystem", "/safe_workspace"]
-}]
-
-agent = create_mcp_agent("File assistant", mcp_servers)
-
-# Operations are restricted to /safe_workspace
-await agent.execute("Create file data.txt with some content")  # ✅ Allowed
-await agent.execute("Read /etc/passwd")  # ❌ Blocked by MCP server
-```
-
-## Interactive Demos
-
-```bash
-# Quick start with agent types
-python examples/quick_start.py
-
-# Interactive Code Agent (like Claude Code)
-python examples/code_agent_demo.py
-```
-
-## API Reference
-
-### Agent Methods
-
-| Method | Description | Use Case |
-|--------|-------------|----------|
-| `execute(message)` | ✨ **Recommended** - Auto-detects conversation state | General use |
-| `stream(message)` | ✨ **Recommended** - Streaming with auto-detection | Real-time responses |
-| `run(query)` | Forces new conversation | When you need fresh start |
-| `chat(message)` | Forces continuation | When you need to continue |
-
-### MCP Methods
-
-| Method | Description |
-|--------|-------------|
-| `connect_mcp_server(config)` | Connect to an MCP server manually |
-| `disconnect_mcp_server(name)` | Disconnect from an MCP server |
-| `list_mcp_servers()` | Get list of connected MCP servers |
-| `list_mcp_tools()` | Get list of available MCP tools |
-
-
-## Configuration
-
-### Environment Variables
-
-```bash
-export OPENAI_API_KEY="your-key"
-export OPENROUTE_CLAUDE_KEY="your-key"  # For OpenRouter
-```
-
-### Agent Configuration
+## Configuration Options
 
 ```python
 agent = ReActAgent(
-    system_prompt="Custom system prompt",
-    api_key="your-key",
-    base_url="https://api.openai.com/v1",  # or OpenRouter
-    model="gpt-4",
+    system_prompt="Your agent's role and personality",
+    api_key="your-key",              # or set OPENAI_API_KEY
+    model="gpt-4",                   # any OpenAI-compatible model  
     temperature=0.1,
-    max_tokens=4000,
-    verbose=True,  # Debug output
-    debug=True,    # Detailed debugging
-    
-    # MCP Integration (optional)
-    mcp_servers=[
-        {
-            "name": "server_name",
-            "command": "mcp-server-command",
-            "args": ["--option", "value"],
-            "env": {"API_KEY": "value"}
-        }
-    ],
-    auto_connect_mcp=True  # Auto-connect on startup
+    base_url="https://api.openai.com/v1",  # for other providers
+    interactive=True,                # enables real-time features
+    mcp_servers=[...],               # optional external tools
+    debug=False                      # development mode
 )
 ```
 
-### MCP Server Configuration
+---
 
-MCP servers are configured with a dictionary containing:
-- `name`: Unique identifier for the server
-- `command`: Command to start the MCP server process
-- `args`: Command line arguments (optional)
-- `env`: Environment variables (optional)
-
-**Common MCP Servers:**
-```python
-mcp_servers = [
-    # File system access
-    {
-        "name": "filesystem",
-        "command": "mcp-server-filesystem",
-        "args": ["/workspace"]
-    },
-    
-    # Web search with Brave
-    {
-        "name": "brave_search", 
-        "command": "mcp-server-brave-search",
-        "env": {"BRAVE_API_KEY": "your_key"}
-    },
-    
-    # GitHub integration
-    {
-        "name": "github",
-        "command": "mcp-server-github",
-        "env": {"GITHUB_TOKEN": "your_token"}
-    },
-    
-    # SQLite database
-    {
-        "name": "sqlite",
-        "command": "mcp-server-sqlite",
-        "args": ["--db-path", "/path/to/database.db"]
-    }
-]
-```
+**Build your intelligent agent. Your way.**

@@ -59,3 +59,23 @@ def create_simple_agent(system_prompt: str, **kwargs) -> ReActAgent:
 def create_mcp_agent(system_prompt: str, mcp_servers: List[Dict[str, Any]], **kwargs) -> ReActAgent:
     """Create agent with MCP servers for I/O."""
     return create_agent(system_prompt, mcp_servers=mcp_servers, **kwargs)
+
+
+def create_interactive_agent(system_prompt: str, mcp_servers: Optional[List[Dict[str, Any]]] = None, **kwargs) -> ReActAgent:
+    """
+    Create an interactive agent with real-time status updates, ESC interruption, and tool permissions.
+    
+    Args:
+        system_prompt: System prompt for the agent
+        mcp_servers: Optional MCP servers for I/O operations
+        **kwargs: Additional agent parameters
+        
+    Returns:
+        Interactive ReActAgent with full real-time capabilities
+    """
+    return create_agent(
+        system_prompt, 
+        mcp_servers=mcp_servers, 
+        interactive=True,
+        **kwargs
+    )

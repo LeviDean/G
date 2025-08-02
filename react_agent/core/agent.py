@@ -3,10 +3,14 @@ import os
 import asyncio
 import logging
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Callable, Union
+from typing import List, Dict, Any, Optional, Callable
 from openai import AsyncOpenAI
 from .tool import Tool
 from .hierarchical_logger import get_hierarchical_logger, create_child_logger
+from .interactive import (
+    MessageManager, ToolPermissionManager, InteractiveStatusReporter,
+    MessageType, PermissionChoice, setup_default_handlers
+)
 
 # Optional MCP imports
 try:
@@ -43,11 +47,11 @@ class ReActAgent:
                  model: str = "gpt-4",
                  temperature: float = 0.1,
                  max_tokens: Optional[int] = 128000,
-                 verbose: bool = False,
                  debug: bool = False,
                  logger: Optional[logging.Logger] = None,
                  mcp_servers: Optional[List[Dict[str, Any]]] = None,
                  auto_connect_mcp: bool = True,
+                 interactive: bool = False,
                  **client_kwargs):
         
         # API Configuration - all services must follow OpenAI specification
@@ -76,7 +80,6 @@ class ReActAgent:
         if not system_prompt or not system_prompt.strip():
             raise ValueError("system_prompt is required and cannot be empty")
         self.system_prompt = system_prompt.strip()
-        self.verbose = verbose
         self.debug = debug
         
         # Logging Configuration
@@ -87,10 +90,7 @@ class ReActAgent:
         # State
         self.tools: Dict[str, Tool] = {}
         self.conversation_history: List[Dict[str, Any]] = []  # OpenAI API format
-        self.detailed_history: List[Dict[str, Any]] = []     # Full interaction history
         self.total_tokens = 0
-        self.operation_count = 0
-        self.start_time = datetime.now()
         
         # MCP Integration
         self.mcp_servers: Dict[str, Dict] = {}  # {server_name: {session, tools}}
@@ -101,6 +101,18 @@ class ReActAgent:
         # Callbacks
         self.on_tool_call: Optional[Callable[[str, Dict], None]] = None
         self.on_iteration: Optional[Callable[[int, str], None]] = None
+        
+        # Interactive system
+        self.interactive = interactive
+        self.message_manager: Optional[MessageManager] = None
+        self.permission_manager: Optional[ToolPermissionManager] = None
+        self.status_reporter: Optional[InteractiveStatusReporter] = None
+        
+        if self.interactive:
+            self.message_manager = MessageManager()
+            self.permission_manager = ToolPermissionManager()
+            self.status_reporter = InteractiveStatusReporter(self.message_manager)
+            setup_default_handlers(self.message_manager)
         
         # Initialize MCP connections if configured
         if self._mcp_server_configs and not _MCP_AVAILABLE:
@@ -128,69 +140,9 @@ class ReActAgent:
         if self.enable_logging and self.logger:
             self.logger.error(f"❌ {message}")
     
-    def _log_operation_start(self, operation: str, details: str = ""):
-        """Log the start of an operation."""
-        self.operation_count += 1
-        self._log_info(f"▶️  OPERATION {self.operation_count}: {operation}")
-        if details:
-            self._log_info(f"   Details: {details}")
+    # Operation tracking removed - simplified logging
     
-    def _log_operation_complete(self, operation: str, execution_time: float = 0, result_preview: str = ""):
-        """Log the completion of an operation."""
-        self._log_info(f"✅ COMPLETED: {operation}")
-        if execution_time > 0:
-            self._log_info(f"   Time: {execution_time:.2f}s")
-        if result_preview:
-            preview = result_preview[:100] + "..." if len(result_preview) > 100 else result_preview
-            self._log_info(f"   Result: {preview}")
-    
-    def _add_detailed_history_entry(self, entry_type: str, content: Dict[str, Any]):
-        """Add an entry to the detailed conversation history."""
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "type": entry_type,  # "user_message", "tool_call", "tool_result", "agent_response", "iteration_start"
-            "content": content
-        }
-        self.detailed_history.append(entry)
-        
-        # Log if enabled
-        if entry_type == "user_message":
-            self._log_info(f"👤 User: {content.get('message', '')[:100]}")
-        elif entry_type == "tool_call":
-            self._log_info(f"🔧 Tool call: {content.get('tool_name')} -> {content.get('args', {})}")
-        elif entry_type == "tool_result":
-            result_preview = str(content.get('result', ''))[:50]
-            self._log_info(f"🛠️  Tool result: {result_preview}...")
-        elif entry_type == "agent_response":
-            pass
-            # response_preview = content.get('response', '')[:100]
-            # self._log_info(f"🤖 Agent response: {response_preview}...")
-    
-    def get_detailed_history(self) -> List[Dict[str, Any]]:
-        """Get the complete detailed interaction history."""
-        return self.detailed_history.copy()
-    
-    def get_conversation_summary(self) -> Dict[str, Any]:
-        """Get a summary of the conversation including tool interactions."""
-        user_messages = [h for h in self.detailed_history if h["type"] == "user_message"]
-        tool_calls = [h for h in self.detailed_history if h["type"] == "tool_call"]
-        agent_responses = [h for h in self.detailed_history if h["type"] == "agent_response"]
-        
-        tools_used = {}
-        for tool_call in tool_calls:
-            tool_name = tool_call["content"].get("tool_name", "unknown")
-            tools_used[tool_name] = tools_used.get(tool_name, 0) + 1
-        
-        return {
-            "total_interactions": len(self.detailed_history),
-            "user_messages": len(user_messages),
-            "tool_calls": len(tool_calls),
-            "agent_responses": len(agent_responses),
-            "tools_used": tools_used,
-            "conversation_duration": (datetime.now() - self.start_time).total_seconds(),
-            "total_tokens": self.total_tokens,
-            "operations": self.operation_count
-        }
+    # Detailed history removed - simplified for elegance
         
     def bind_tool(self, tool: Tool) -> 'ReActAgent':
         """
@@ -207,8 +159,6 @@ class ReActAgent:
         
         if tool.name in self.tools:
             self._log_warning(f"Overriding existing tool '{tool.name}'")
-            if self.verbose:
-                print(f"Warning: Overriding existing tool '{tool.name}'")
         
         # Create child logger for the tool if agent has logging enabled
         if self.logger is not None:
@@ -329,6 +279,16 @@ class ReActAgent:
             self._log_error(f"Raw arguments: '{tool_call.function.arguments}'")
             return f"Error: {error_msg}"
         
+        # Check for interruption before tool execution
+        if self.interactive and self.message_manager and self.message_manager.is_interrupted():
+            return "Task interrupted by user."
+        
+        # Check tool permissions in interactive mode
+        if self.interactive and self.permission_manager:
+            permission = await self.permission_manager.request_permission(function_name, self.message_manager)
+            if permission == PermissionChoice.DENY:
+                return f"Tool '{function_name}' not allowed. Task stopped."
+        
         # Check if it's a local tool or MCP tool
         is_mcp_tool = function_name in self.mcp_tools
         is_local_tool = function_name in self.tools
@@ -345,19 +305,15 @@ class ReActAgent:
         self._log_info(f"🔧 Calling tool: {function_name}")
         self._log_info(f"   Args: {function_args}")
         
-        # Track in detailed history
-        self._add_detailed_history_entry("tool_call", {
-            "tool_name": function_name,
-            "args": function_args,
-            "tool_call_id": tool_call.id
-        })
+        # Tool call tracking via logging
+        
+        # Report tool call in interactive mode
+        if self.interactive and self.status_reporter:
+            await self.status_reporter.report_tool_call(function_name, function_args)
         
         # Call callback if set
         if self.on_tool_call:
             self.on_tool_call(function_name, function_args)
-        
-        if self.verbose:
-            print(f"🔧 Calling tool: {function_name} with args: {function_args}")
         
         try:
             if is_local_tool:
@@ -373,17 +329,11 @@ class ReActAgent:
             # self._log_info(f"   Time: {execution_time:.2f}s")
             # self._log_info(f"   Result: {result_str[:100]}{'...' if len(result_str) > 100 else ''}")
             
-            # Track in detailed history
-            self._add_detailed_history_entry("tool_result", {
-                "tool_name": function_name,
-                "result": result_str,
-                "execution_time": execution_time,
-                "success": True,
-                "tool_call_id": tool_call.id
-            })
+            # Tool result tracking via logging and interactive reporting
             
-            if self.verbose:
-                print(f"✅ Tool result: {result_str[:100]}{'...' if len(result_str) > 100 else ''}")
+            # Report tool result in interactive mode
+            if self.interactive and self.status_reporter:
+                await self.status_reporter.report_tool_result(function_name, result_str, True)
             
             return result_str
         except Exception as e:
@@ -394,18 +344,12 @@ class ReActAgent:
             self._log_error(f"   Time: {execution_time:.2f}s")
             self._log_error(f"   Error: {str(e)}")
             
-            # Track failed tool result in detailed history
-            self._add_detailed_history_entry("tool_result", {
-                "tool_name": function_name,
-                "result": error_msg,
-                "execution_time": execution_time,
-                "success": False,
-                "error": str(e),
-                "tool_call_id": tool_call.id
-            })
+            # Tool error tracking via logging and interactive reporting
             
-            if self.verbose:
-                print(f"❌ {error_msg}")
+            # Report tool error in interactive mode
+            if self.interactive and self.status_reporter:
+                await self.status_reporter.report_tool_result(function_name, error_msg, False)
+            
             return error_msg
     
     async def _execute_mcp_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
@@ -599,6 +543,288 @@ class ReActAgent:
         self.conversation_history = []
         return await self.execute(query, max_iterations)
     
+    async def execute_interactive(self, message: str, max_iterations: int = 10, stream: bool = True) -> str:
+        """
+        Execute the agent with interactive capabilities - real-time status updates,
+        ESC interruption, and tool permissions.
+        
+        Args:
+            message: The user's message/question
+            max_iterations: Maximum number of reasoning iterations
+            stream: Whether to stream LLM responses in real-time (default: True)
+            
+        Returns:
+            The agent's final response
+        """
+        if not self.interactive:
+            raise ValueError("Agent not configured for interactive mode. Set interactive=True in constructor.")
+        
+        if not message.strip():
+            raise ValueError("Message cannot be empty")
+        
+        # Start the message manager input loop in background
+        input_task = asyncio.create_task(self.message_manager.start_input_loop())
+        
+        try:
+            # Execute the agent with real-time interaction
+            result = await self._execute_with_interaction(message, max_iterations, stream)
+            
+            # Wait a moment for any pending output messages to be processed
+            await asyncio.sleep(0.1)
+            
+            return result
+        finally:
+            # Clean up input loop
+            self.message_manager.stop()
+            if not input_task.done():
+                input_task.cancel()
+                try:
+                    await input_task
+                except asyncio.CancelledError:
+                    pass
+    
+    async def _execute_with_interaction(self, message: str, max_iterations: int = 10, stream: bool = True) -> str:
+        """Internal method for interactive execution."""
+        run_start = datetime.now()
+        is_new_conversation = not self.conversation_history
+        
+        # Ensure MCP connections are established if needed
+        await self._ensure_mcp_connections()
+        
+        # Report initial status
+        if self.status_reporter:
+            await self.status_reporter.report_status("Starting agent execution", f"Message: {message[:50]}...")
+        
+        # Initialize or continue conversation
+        if is_new_conversation:
+            self.conversation_history = [
+                {"role": "system", "content": self._create_system_prompt()},
+                {"role": "user", "content": message}
+            ]
+        else:
+            self.conversation_history.append({
+                "role": "user", 
+                "content": message
+            })
+        
+        # User message tracking via logging
+        
+        try:
+            for iteration in range(max_iterations):
+                # Check for interruption at start of each iteration
+                if self.message_manager.is_interrupted():
+                    return "Task interrupted by user."
+                
+                if self.status_reporter:
+                    await self.status_reporter.report_status(f"Iteration {iteration + 1}/{max_iterations}")
+                
+                # Get tool schemas for function calling
+                tools = self._get_tool_schemas() if self.tools else None
+                
+                # Prepare API call parameters
+                api_params = {
+                    "model": self.model,
+                    "messages": self.conversation_history,
+                    "temperature": self.temperature
+                }
+                
+                if self.max_tokens:
+                    api_params["max_tokens"] = self.max_tokens
+                    
+                if tools:
+                    api_params["tools"] = tools
+                    api_params["tool_choice"] = "auto"
+                
+                if stream:
+                    # Streaming mode - real-time thinking updates
+                    api_params["stream"] = True
+                    
+                    stream_response = await self.client.chat.completions.create(**api_params)
+                    
+                    collected_content = ""
+                    collected_tool_calls = []
+                    first_content_chunk = True
+                    has_tool_calls_in_stream = False
+                    
+                    async for chunk in stream_response:
+                        if chunk.choices and chunk.choices[0].delta:
+                            delta = chunk.choices[0].delta
+                            
+                            # Check if we're getting tool calls (indicates working mode)
+                            if delta.tool_calls:
+                                has_tool_calls_in_stream = True
+                            
+                            # Stream content in real-time
+                            if delta.content:
+                                # Add newline before first content chunk for clean separation
+                                if first_content_chunk:
+                                    if self.status_reporter:
+                                        await self.status_reporter.report_thinking("\n")
+                                    first_content_chunk = False
+                                
+                                collected_content += delta.content
+                                
+                                # If no tool calls detected, this is likely the final response
+                                # Use normal color. If tool calls present, use gray (working)
+                                if self.status_reporter:
+                                    if has_tool_calls_in_stream:
+                                        await self.status_reporter.report_thinking(delta.content)
+                                    else:
+                                        await self.status_reporter.report_response(delta.content)
+                            
+                            # Collect tool calls
+                            if delta.tool_calls:
+                                for tool_call_delta in delta.tool_calls:
+                                    # Extend tool calls list if needed
+                                    while len(collected_tool_calls) <= tool_call_delta.index:
+                                        collected_tool_calls.append({
+                                            "id": "",
+                                            "type": "function",
+                                            "function": {"name": "", "arguments": ""}
+                                        })
+                                    
+                                    tc = collected_tool_calls[tool_call_delta.index]
+                                    if tool_call_delta.id:
+                                        tc["id"] = tool_call_delta.id
+                                    if tool_call_delta.function:
+                                        if tool_call_delta.function.name:
+                                            tc["function"]["name"] = tool_call_delta.function.name
+                                        if tool_call_delta.function.arguments:
+                                            tc["function"]["arguments"] += tool_call_delta.function.arguments
+                    
+                    # Convert to message format
+                    tool_calls_for_history = None
+                    if collected_tool_calls:
+                        tool_calls_for_history = []
+                        for tc in collected_tool_calls:
+                            if tc["function"]["name"]:  # Only add complete tool calls
+                                tool_calls_for_history.append({
+                                    "id": tc["id"],
+                                    "type": tc["type"],
+                                    "function": {
+                                        "name": tc["function"]["name"],
+                                        "arguments": tc["function"]["arguments"]
+                                    }
+                                })
+                    
+                    # Create message object for consistency with proper tool call objects
+                    from types import SimpleNamespace
+                    message_obj = SimpleNamespace()
+                    message_obj.content = collected_content
+                    
+                    # Convert dict tool calls to proper objects for _execute_tool_call
+                    if tool_calls_for_history:
+                        message_obj.tool_calls = []
+                        for tc_dict in tool_calls_for_history:
+                            tool_call_obj = SimpleNamespace()
+                            tool_call_obj.id = tc_dict["id"]
+                            tool_call_obj.type = tc_dict["type"]
+                            tool_call_obj.function = SimpleNamespace()
+                            tool_call_obj.function.name = tc_dict["function"]["name"]
+                            tool_call_obj.function.arguments = tc_dict["function"]["arguments"]
+                            message_obj.tool_calls.append(tool_call_obj)
+                    else:
+                        message_obj.tool_calls = None
+                    
+                else:
+                    # Non-streaming mode
+                    response = await self.client.chat.completions.create(**api_params)
+                    
+                    # Track token usage
+                    if hasattr(response, 'usage') and response.usage:
+                        self.total_tokens += response.usage.total_tokens
+                    
+                    message_obj = response.choices[0].message
+                    
+                    # Report thinking if available
+                    if message_obj.content and self.status_reporter:
+                        await self.status_reporter.report_thinking(message_obj.content)
+                
+                # Add assistant message to history (use dicts for JSON serialization)
+                if stream and tool_calls_for_history:
+                    # Streaming mode - use the dict format we created
+                    self.conversation_history.append({
+                        "role": "assistant",
+                        "content": message_obj.content,
+                        "tool_calls": tool_calls_for_history
+                    })
+                else:
+                    # Non-streaming mode - convert tool calls to dicts if needed
+                    tool_calls_dict = None
+                    if hasattr(message_obj, 'tool_calls') and message_obj.tool_calls:
+                        tool_calls_dict = []
+                        for tc in message_obj.tool_calls:
+                            tool_calls_dict.append({
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            })
+                    
+                    self.conversation_history.append({
+                        "role": "assistant",
+                        "content": message_obj.content,
+                        "tool_calls": tool_calls_dict
+                    })
+                
+                # Execute tool calls if any
+                if message_obj.tool_calls:
+                    if len(message_obj.tool_calls) == 1:
+                        # Single tool call - check for interruption
+                        tool_call = message_obj.tool_calls[0]
+                        if self.message_manager.is_interrupted():
+                            return "Task interrupted by user."
+                        
+                        result = await self._execute_tool_call(tool_call)
+                        self.conversation_history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": result
+                        })
+                        
+                        # If tool was denied, stop execution
+                        if "not allowed" in result and "stopped" in result:
+                            return result
+                    else:
+                        # Multiple tool calls - execute in parallel for better performance
+                        # Check for interruption before starting
+                        if self.message_manager.is_interrupted():
+                            return "Task interrupted by user."
+                        
+                        tasks = [self._execute_tool_call(tool_call) for tool_call in message_obj.tool_calls]
+                        results = await asyncio.gather(*tasks)
+                        
+                        for tool_call, result in zip(message_obj.tool_calls, results):
+                            self.conversation_history.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": result
+                            })
+                            
+                            # If any tool was denied, stop execution
+                            if "not allowed" in result and "stopped" in result:
+                                return result
+                else:
+                    # No tool calls, we have a final answer
+                    if message_obj.content:
+                        final_answer = message_obj.content.strip()
+                        execution_time = (datetime.now() - run_start).total_seconds()
+                        
+                        # Final response tracking via logging
+                        
+                        # Streaming already showed the response, no need to report again
+                        
+                        return final_answer
+            
+            timeout_msg = f"Maximum iterations ({max_iterations}) reached without finding a final answer."
+            return timeout_msg
+            
+        except Exception as e:
+            error_msg = f"Error during agent execution: {str(e)}"
+            raise Exception(error_msg) from e
+
     async def execute(self, message: str, max_iterations: int = 10) -> str:
         """
         Execute the agent with a message. Auto-detects new vs continuing conversation.
@@ -625,13 +851,9 @@ class ReActAgent:
         
         # Log operation
         operation = "Agent Execute (New)" if is_new_conversation else "Agent Execute (Continue)"
-        self._log_operation_start(operation, f"Message: {message[:100]}{'...' if len(message) > 100 else ''}")
         
         if is_new_conversation:
             self._log_info(f"📋 Available tools: {list(self.tools.keys())}")
-            if self.verbose:
-                print(f"🤖 Starting ReAct agent with message: {message}")
-                print(f"📋 Available tools: {list(self.tools.keys())}")
         
         # Initialize or continue conversation
         if is_new_conversation:
@@ -649,18 +871,11 @@ class ReActAgent:
             })
             operation_type = "Agent Execute Continue"
         
-        # Track in detailed history
-        self._add_detailed_history_entry("user_message", {
-            "message": message,
-            "operation": operation_type
-        })
+        # User message tracking via logging
         
         try:
             for iteration in range(max_iterations):
                 self._log_info(f"🔄 Iteration {iteration + 1}/{max_iterations}")
-                
-                if self.verbose:
-                    print(f"\n🔄 Iteration {iteration + 1}/{max_iterations}")
                 
                 # Call iteration callback if set
                 if self.on_iteration:
@@ -701,8 +916,7 @@ class ReActAgent:
                     "tool_calls": message_obj.tool_calls
                 })
                 
-                if self.verbose and message_obj.content:
-                    print(f"🧠 Agent thinking: {message_obj.content}")
+                # Verbose mode removed - using interactive system instead
                 
                 # Execute tool calls if any - run concurrently for better performance
                 if message_obj.tool_calls:
@@ -732,28 +946,16 @@ class ReActAgent:
                         final_answer = message_obj.content.strip()
                         execution_time = (datetime.now() - run_start).total_seconds()
                         
-                        self._log_operation_complete(operation, execution_time)
-                        
-                        if self.verbose:
-                            print(f"✅ Final answer: {final_answer}")
+                        # Operation completed
                         
                         agent_response_preview = final_answer[:100] + "..." if len(final_answer) > 100 else final_answer
                         self._log_info(f"🤖 Agent response: {agent_response_preview}")
                         
-                        # Track final response in detailed history
-                        self._add_detailed_history_entry("agent_response", {
-                            "response": final_answer,
-                            "iterations": iteration + 1,
-                            "operation": operation_type,
-                            "execution_time": execution_time,
-                            "final": True
-                        })
+                        # Final response tracking via logging
                         
                         return final_answer
             
             timeout_msg = f"Maximum iterations ({max_iterations}) reached without finding a final answer."
-            if self.verbose:
-                print(f"⏰ {timeout_msg}")
             return timeout_msg
             
         except Exception as e:
@@ -805,11 +1007,7 @@ class ReActAgent:
             })
             operation_type = "Agent Stream Continue"
         
-        # Track in detailed history
-        self._add_detailed_history_entry("user_message", {
-            "message": message,
-            "operation": operation_type
-        })
+        # User message tracking via logging
         
         try:
             for iteration in range(max_iterations):
@@ -939,38 +1137,7 @@ class ReActAgent:
             yield {"type": "error", "content": error_msg}
             raise Exception(error_msg) from e
     
-    # Backward compatibility methods
-    async def run_stream(self, query: str, max_iterations: int = 10):
-        """
-        Backward compatibility method. Use stream() instead.
-        Stream the agent's reasoning process starting a new conversation.
-        """
-        # Reset conversation to ensure new start
-        self.conversation_history = []
-        async for update in self.stream(query, max_iterations):
-            yield update
     
-    async def chat_stream(self, message: str, max_iterations: int = 10):
-        """
-        Backward compatibility method. Use stream() instead.
-        Stream the agent's reasoning process continuing existing conversation.
-        """
-        async for update in self.stream(message, max_iterations):
-            yield update
-    
-    def run_sync(self, query: str, max_iterations: int = 10, stream: bool = False) -> str:
-        """
-        Synchronous wrapper for run() method.
-        
-        Args:
-            query: The user's query/question
-            max_iterations: Maximum number of reasoning iterations
-            stream: Whether to stream intermediate results (future feature)
-            
-        Returns:
-            The agent's final response
-        """
-        return asyncio.run(self.run(query, max_iterations, stream))
     
     def reset(self) -> 'ReActAgent':
         """
@@ -984,87 +1151,6 @@ class ReActAgent:
         if self.debug:
             print("🔄 Agent state reset")
         return self
-    
-    async def chat(self, message: str) -> str:
-        """
-        Backward compatibility method. Use execute() instead.
-        Continue the conversation with existing context.
-        """
-        return await self.execute(message)
-    
-    
-    def chat_sync(self, message: str) -> str:
-        """
-        Synchronous wrapper for chat() method.
-        
-        Args:
-            message: Follow-up message
-            
-        Returns:
-            Agent's response
-        """
-        return asyncio.run(self.chat(message))
-    
-    async def _continue_conversation(self, max_iterations: int = 5) -> str:
-        """Continue the conversation from current state (async)."""
-        try:
-            for iteration in range(max_iterations):
-                tools = self._get_tool_schemas() if self.tools else None
-                
-                api_params = {
-                    "model": self.model,
-                    "messages": self.conversation_history,
-                    "temperature": self.temperature
-                }
-                
-                if self.max_tokens:
-                    api_params["max_tokens"] = self.max_tokens
-                    
-                if tools:
-                    api_params["tools"] = tools
-                    api_params["tool_choice"] = "auto"
-                
-                response = await self.client.chat.completions.create(**api_params)
-                
-                if hasattr(response, 'usage') and response.usage:
-                    self.total_tokens += response.usage.total_tokens
-                
-                message = response.choices[0].message
-                self.conversation_history.append({
-                    "role": "assistant",
-                    "content": message.content,
-                    "tool_calls": message.tool_calls
-                })
-                
-                if message.tool_calls:
-                    # Execute multiple tool calls concurrently
-                    if len(message.tool_calls) == 1:
-                        tool_call = message.tool_calls[0]
-                        result = await self._execute_tool_call(tool_call)
-                        self.conversation_history.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": result
-                        })
-                    else:
-                        tasks = [self._execute_tool_call(tool_call) for tool_call in message.tool_calls]
-                        results = await asyncio.gather(*tasks)
-                        
-                        for tool_call, result in zip(message.tool_calls, results):
-                            self.conversation_history.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": result
-                            })
-                else:
-                    if message.content:
-                        return message.content.strip()
-            
-            return "Could not generate response in maximum iterations."
-            
-        except Exception as e:
-            raise Exception(f"Error in chat continuation: {str(e)}") from e
-    
     
     def get_conversation_history(self) -> List[Dict[str, Any]]:
         """Get the current conversation history."""
@@ -1105,6 +1191,22 @@ class ReActAgent:
         if on_iteration:
             self.on_iteration = on_iteration
         return self
+    
+    def reset_permissions(self) -> 'ReActAgent':
+        """Reset all tool permissions in interactive mode."""
+        if self.interactive and self.permission_manager:
+            self.permission_manager.reset_permissions()
+        return self
+    
+    def is_interactive(self) -> bool:
+        """Check if agent is in interactive mode."""
+        return self.interactive
+    
+    def get_permissions(self) -> Dict[str, str]:
+        """Get current tool permissions (interactive mode only)."""
+        if self.interactive and self.permission_manager:
+            return self.permission_manager.permissions.copy()
+        return {}
     
     def __repr__(self) -> str:
         """String representation of the agent."""

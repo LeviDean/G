@@ -31,24 +31,32 @@ class SubAgentDispatchTool(Tool):
             return "Error: Dispatch tool must be bound to an agent"
         
         try:
-            # Create sub-agent with same API config as main agent
+            # Extract configuration safely from parent agent
+            api_key = getattr(self.agent, 'api_key', None)
+            model = getattr(self.agent, 'model', 'gpt-4')
+            temperature = getattr(self.agent, 'temperature', 0.1)
+            max_tokens = getattr(self.agent, 'max_tokens', None)
+            
+            # Extract base_url safely
+            base_url = None
+            if hasattr(self.agent, 'client') and hasattr(self.agent.client, 'base_url'):
+                base_url = self.agent.client.base_url
+            
+            # Create sub-agent with extracted config
             sub_agent = ReActAgent(
                 system_prompt=agent_prompt,
-                api_key=self.agent.api_key,
-                base_url=getattr(self.agent.client, 'base_url', None) if hasattr(self.agent, 'client') else None,
-                model=self.agent.model,
-                temperature=self.agent.temperature,
-                max_tokens=self.agent.max_tokens,
-                verbose=False,
-                debug=False
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                debug=False,
+                interactive=False  # Sub-agents should not be interactive
             )
             
-            # Ensure main agent has workspace (create default if needed)
-            self.agent._ensure_default_workspace()
-            
-            # Copy workspace if main agent has one
-            if hasattr(self.agent, 'workspace') and self.agent.workspace:
-                sub_agent.bind_workspace(str(self.agent.workspace.root_path))
+            # Add basic calculator tool to sub-agent (most common need)
+            from ..tools.calculator import CalculatorTool
+            sub_agent.bind_tool(CalculatorTool())
             
             # Bind requested tools from main agent's available tools
             if tools:
@@ -58,9 +66,9 @@ class SubAgentDispatchTool(Tool):
                         tool_class = type(tool_instance)
                         sub_agent.bind_tool(tool_class())
             
-            # Execute the task
+            # Execute the task using the standard execute method
             result = await asyncio.wait_for(
-                sub_agent.run(task),
+                sub_agent.execute(task),
                 timeout=60.0  # Default timeout
             )
             
