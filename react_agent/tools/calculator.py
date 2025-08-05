@@ -6,6 +6,10 @@ from ..core.tool import Tool, tool, param
 class CalculatorTool(Tool):
     """A calculator tool using decorator-based parameter definition."""
     
+    def __init__(self, **kwargs):
+        # Calculator operations are fast, use shorter timeout
+        super().__init__(timeout=5.0, **kwargs)
+    
     @param("expression", type="string", description="Mathematical expression to evaluate (e.g., '2 + 3 * 4', 'sqrt(16)')")
     async def _execute(self) -> str:
         """Execute a mathematical expression safely."""

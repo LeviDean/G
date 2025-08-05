@@ -209,7 +209,8 @@ class Tool(ParameterAccessMixin, ABC):
                  parameters: Optional[Dict[str, Dict[str, Any]]] = None,
                  required: Optional[List[str]] = None,
                  logger: Optional[logging.Logger] = None,
-                 agent_name: Optional[str] = None):
+                 agent_name: Optional[str] = None,
+                 timeout: Optional[float] = None):
         
         super().__init__()
         
@@ -235,6 +236,14 @@ class Tool(ParameterAccessMixin, ABC):
         self.agent_name = agent_name or "UnknownAgent"
         self.logger = logger  # Use provided logger or None
         self.enable_logging = logger is not None
+        
+        # Timeout configuration
+        if timeout is not None:
+            self.timeout = timeout
+            self._custom_timeout_set = True  # Mark as having custom timeout
+        else:
+            self.timeout = 30.0  # Default timeout
+            self._custom_timeout_set = False
         
         # Agent reference for accessing bound workspace
         self.agent = None  # Will be set when tool is bound to agent
@@ -313,8 +322,8 @@ class Tool(ParameterAccessMixin, ABC):
         self._current_params = validated_params
         
         try:
-            # Call the _execute method
-            result = await self._execute()
+            # Call the _execute method with timeout
+            result = await asyncio.wait_for(self._execute(), timeout=self.timeout)
             
             execution_time = (datetime.now() - start_time).total_seconds()
             result_str = str(result)
@@ -325,6 +334,13 @@ class Tool(ParameterAccessMixin, ABC):
             self._log_info(f"   Result: {result_str[:100]}{'...' if len(result_str) > 100 else ''}")
             
             return result
+            
+        except asyncio.TimeoutError:
+            execution_time = (datetime.now() - start_time).total_seconds()
+            timeout_msg = f"Tool execution timed out after {self.timeout}s"
+            self._log_error(timeout_msg)
+            self._log_error(f"   Time: {execution_time:.2f}s")
+            return f"Error: {timeout_msg}"
             
         except Exception as e:
             execution_time = (datetime.now() - start_time).total_seconds()

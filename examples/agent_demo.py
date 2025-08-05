@@ -18,6 +18,7 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
 from react_agent import create_interactive_agent
+from react_agent.tools import CalculatorTool, SubAgentDispatchTool, ReadFileTool, EditFileTool, ShellTool, WriteFileTool
 
 class CodeAgentDemo:
     def __init__(self):
@@ -54,11 +55,11 @@ You can:
 - Explain code and provide recommendations
 
 Always be concise and practical. Use relative file paths when working with files.""",
-            mcp_servers=[{
-                "name": "filesystem",
-                "command": "npx",
-                "args": ["@modelcontextprotocol/server-filesystem", self.workspace]
-            }],
+            # mcp_servers=[{
+            #     "name": "filesystem",
+            #     "command": "npx",
+            #     "args": ["@modelcontextprotocol/server-filesystem", self.workspace]
+            # }],
             api_key=api_key,
             base_url=base_url,
             model=model,
@@ -66,7 +67,16 @@ Always be concise and practical. Use relative file paths when working with files
             debug=False
         )
         
-        print("🤖 Code Agent initialized with file operations")
+        self.agent.bind_tools([
+            CalculatorTool(),
+            SubAgentDispatchTool(), 
+            ReadFileTool(), 
+            EditFileTool(), 
+            ShellTool(), 
+            WriteFileTool()
+        ])
+        
+        print("🤖 Agent initialized")
         # Suppress verbose MCP server messages
         import logging
         logging.getLogger('mcp').setLevel(logging.WARNING)

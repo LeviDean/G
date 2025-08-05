@@ -11,6 +11,10 @@ class SubAgentDispatchTool(Tool):
     Agents can use this adaptively to delegate specialized work.
     """
     
+    def __init__(self, **kwargs):
+        # Sub-agent tasks can take longer, use extended timeout
+        super().__init__(timeout=120.0, **kwargs)
+    
     @param("task", type="string", description="Task description to dispatch")
     @param("agent_prompt", type="string", description="System prompt for the sub-agent to specialize it for this task")
     @param("tools", type="array", description="List of tool names the sub-agent should have access to", required=False)

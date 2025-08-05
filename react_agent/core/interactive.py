@@ -9,10 +9,22 @@ This module provides:
 """
 
 import asyncio
+import sys
 from typing import Dict, Any, Optional, Callable
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
+
+# Simple Chinese character support
+import locale
+import os
+
+# Set UTF-8 environment
+os.environ['PYTHONIOENCODING'] = 'utf-8'
+try:
+    locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+except:
+    pass  # Ignore if locale not available
 
 
 class MessageType(Enum):
@@ -234,7 +246,7 @@ async def default_tool_result_handler(message: Message):
     """Default handler for tool result messages."""
     content = message.content
     symbol = "✅" if content['success'] else "❌"
-    result_preview = content['result'] + "..." if len(content['result']) > 100 else content['result']
+    result_preview = content['result'][:100] + "..." if len(content['result']) > 100 else content['result']
     print(f"\033[90m{symbol} {result_preview}\033[0m")
 
 

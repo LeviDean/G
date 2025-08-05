@@ -46,12 +46,13 @@ class ReActAgent:
                  base_url: Optional[str] = None,
                  model: str = "gpt-4",
                  temperature: float = 0.1,
-                 max_tokens: Optional[int] = 128000,
+                 max_tokens: Optional[int] = 128_000,
                  debug: bool = False,
                  logger: Optional[logging.Logger] = None,
                  mcp_servers: Optional[List[Dict[str, Any]]] = None,
                  auto_connect_mcp: bool = True,
                  interactive: bool = False,
+                 tool_timeout: Optional[float] = None,
                  **client_kwargs):
         
         # API Configuration - all services must follow OpenAI specification
@@ -81,6 +82,9 @@ class ReActAgent:
             raise ValueError("system_prompt is required and cannot be empty")
         self.system_prompt = system_prompt.strip()
         self.debug = debug
+        
+        # Tool Configuration
+        self.tool_timeout = tool_timeout if tool_timeout is not None else 30.0
         
         # Logging Configuration
         self.agent_name = agent_name or f"Agent_{id(self)}"
@@ -165,6 +169,11 @@ class ReActAgent:
             tool.logger = create_child_logger(self.agent_name, f"{self.agent_name}.{tool.name}", True)
             tool.enable_logging = True
             tool.agent_name = self.agent_name
+        
+        # Set timeout from agent only if tool uses the default timeout
+        # This preserves custom timeouts set by individual tools
+        if not hasattr(tool, '_custom_timeout_set'):
+            tool.timeout = self.tool_timeout
         
         # Set agent reference on the tool
         tool.agent = self
