@@ -18,7 +18,12 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
 from react_agent import create_interactive_agent
-from react_agent.tools import CalculatorTool, SubAgentDispatchTool, ReadFileTool, EditFileTool, ShellTool, WriteFileTool
+from react_agent.tools import (
+    CalculatorTool, SubAgentDispatchTool, ReadFileTool, EditFileTool, 
+    ShellTool, WriteFileTool, PlanGenerateTool, PlanMaintainTool
+)
+
+from agent_prompts import SYSTEM_PROMPT
 
 class CodeAgentDemo:
     def __init__(self):
@@ -43,18 +48,7 @@ class CodeAgentDemo:
         model = "anthropic/claude-sonnet-4" if os.getenv("OPENROUTE_CLAUDE_KEY") else "gpt-4"
         
         self.agent = create_interactive_agent(
-            system_prompt=f"""You are a Code Agent assistant. Your workspace is {self.workspace}.
-
-IMPORTANT: All file operations must be within the workspace directory. When creating files, use just the filename (e.g., "sort.py") and the MCP filesystem server will place it in the correct workspace location.
-
-You can:
-- Read, write, and analyze code files within the workspace
-- Perform calculations and data processing
-- Execute file operations (create, edit, list, search) within the workspace
-- Help with programming tasks and debugging
-- Explain code and provide recommendations
-
-Always be concise and practical. Use relative file paths when working with files.""",
+            system_prompt=SYSTEM_PROMPT,
             # mcp_servers=[{
             #     "name": "filesystem",
             #     "command": "npx",
@@ -73,7 +67,9 @@ Always be concise and practical. Use relative file paths when working with files
             ReadFileTool(), 
             EditFileTool(), 
             ShellTool(), 
-            WriteFileTool()
+            WriteFileTool(),
+            PlanGenerateTool(),
+            PlanMaintainTool()
         ])
         
         print("🤖 Agent initialized")
@@ -89,6 +85,7 @@ Always be concise and practical. Use relative file paths when working with files
         print("="*60)
         print("Features:")
         print("  📝 File operations (read, write, edit, list)")  
+        print("  📋 Project planning and task management")
         print("  🧮 Calculations and data processing")
         print("  🔍 Code analysis and debugging")
         print("  💡 Programming assistance")
@@ -98,6 +95,7 @@ Always be concise and practical. Use relative file paths when working with files
         print("\nCommands:")
         print("  /help    - Show this help")
         print("  /ls      - List workspace files")
+        print("  /plan    - Show current plan (todo.md)")
         print("  /clear   - Clear screen")
         print("  /quit    - Exit")
         print("\n💡 TIP: When prompted for tool permissions, choose:")
@@ -119,6 +117,12 @@ Always be concise and practical. Use relative file paths when working with files
         print("  • Debug this error in my Python code")
         print("  • Analyze the performance of this algorithm")
         print("  • Refactor this code to be more readable")
+        print()
+        print("Planning & Project Management:")
+        print("  • Create a plan for building a web application")
+        print("  • I need a plan for learning Python in 30 days")
+        print("  • Show my current project plan")
+        print("  • Mark 'database setup' as completed")
         print()
         print("Data Processing:")
         print("  • Calculate the average of [1,2,3,4,5]")
@@ -152,6 +156,21 @@ Always be concise and practical. Use relative file paths when working with files
                     print(f"\n📁 {self.workspace} is empty")
             except Exception as e:
                 print(f"❌ Error listing files: {e}")
+            return True
+        elif command == "/plan":
+            try:
+                plan_path = Path(self.workspace) / "todo.md"
+                if plan_path.exists():
+                    with open(plan_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    print(f"\n📋 Current Plan (todo.md):")
+                    print("-" * 50)
+                    print(content)
+                else:
+                    print("\n📋 No plan found. Ask the agent to create one!")
+                    print("Example: 'Create a plan for building a todo app'")
+            except Exception as e:
+                print(f"❌ Error reading plan: {e}")
             return True
         
         return True if command.startswith("/") else False

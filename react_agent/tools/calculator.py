@@ -1,3 +1,4 @@
+import re
 import math
 from ..core.tool import Tool, tool, param
 
@@ -33,8 +34,6 @@ class CalculatorTool(Tool):
         safe_expression = safe_expression.replace('sqrt', 'math.sqrt')
         
         # Handle trig functions - assume degrees and convert to radians
-        import re
-        
         # Replace sin(x) with math.sin(math.radians(x))
         safe_expression = re.sub(r'sin\(([^)]+)\)', r'math.sin(math.radians(\1))', safe_expression)
         safe_expression = re.sub(r'cos\(([^)]+)\)', r'math.cos(math.radians(\1))', safe_expression)
